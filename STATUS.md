@@ -1,13 +1,13 @@
 # Project Status
 
-Last updated: 2026-06-30
+Last updated: 2026-07-01
 
-This repository is currently developed on a machine without a CUDA-capable GPU. CPU/C++/Python packaging work has been verified locally. CUDA paths are scaffolded or guarded, but GPU behavior still needs validation on a CUDA machine.
+This repository has now been validated on a CUDA-capable machine with an NVIDIA GeForce RTX 3090. CPU/C++/Python packaging work and the current CUDA `DeviceBuffer<T>` paths have been verified locally.
 
 ## Current State
 
 - Milestones 0-4 are implemented: repository foundation, core C++ types, CPU octree builder, CPU point query, Python bindings, and the sphere slice example.
-- Milestone 5 is partially complete: `DeviceBuffer<T>` exists with CPU behavior verified locally and CUDA code paths guarded by `SVO_ENABLE_CUDA`.
+- Milestone 5 is partially complete: `DeviceBuffer<T>` exists with CPU behavior and CUDA allocation/copy behavior verified locally. CUDA code paths remain guarded by `SVO_ENABLE_CUDA`.
 - Core C++ uses GLM types. Do not introduce custom vector structs.
 - Topology uses the bit-packed `NodeDescriptor` structure. This is the intended paper-style packed integer structure.
 - Torch should remain only in Python-facing/Torch integration layers, not in the core C++ API.
@@ -28,20 +28,31 @@ This repository is currently developed on a machine without a CUDA-capable GPU. 
 
 ## Local Verification Passed
 
-Commands run successfully on the non-CUDA development machine:
+Commands run successfully on the CUDA development machine:
 
 ```bash
-cmake -S . -B build-m5 -DSVO_ENABLE_CUDA=OFF -DSVO_BUILD_TESTS=ON
-cmake --build build-m5
-ctest --test-dir build-m5 --output-on-failure
-UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/python -q
+nvidia-smi
+nvcc --version
+cmake -S . -B build-cuda -DSVO_ENABLE_CUDA=ON -DSVO_BUILD_TESTS=ON
+cmake --build build-cuda
+ctest --test-dir build-cuda --output-on-failure
+compute-sanitizer --tool memcheck ./build-cuda/svo_device_buffer_test
+cmake -S . -B build-cpu -DSVO_ENABLE_CUDA=OFF -DSVO_BUILD_TESTS=ON
+cmake --build build-cpu
+ctest --test-dir build-cpu --output-on-failure
+UV_CACHE_DIR=/tmp/uv-cache uv run --extra test pytest tests/python -q
+UV_CACHE_DIR=/tmp/uv-cache uv run python -c "import svo; print(svo.__version__)"
 UV_CACHE_DIR=/tmp/uv-cache uv build
 ```
 
 Results:
 
-- C++ tests: 5/5 passed.
+- GPU: NVIDIA GeForce RTX 3090, driver 580.142, CUDA runtime 13.0, nvcc 12.8.61.
+- CUDA C++ tests: 5/5 passed.
+- CPU-only C++ tests: 5/5 passed.
+- CUDA `DeviceBuffer<T>` memcheck: 0 errors.
 - Python tests: 5 passed.
+- Python import check: reported version `0.1.0`.
 - Python sdist/wheel build: passed.
 - Sphere slice example previously rendered successfully to `/tmp/sphere_slice.png`.
 
@@ -58,24 +69,20 @@ Expected local changes include:
 
 There may also be the earlier pybind11-vendoring cleanup depending on what has been committed before transfer.
 
-## Milestone 5 Remaining Work On CUDA Machine
+## Milestone 5 CUDA Validation
 
-Run and fix as needed:
+Completed on the CUDA machine:
 
-```bash
-cmake -S . -B build-cuda -DSVO_ENABLE_CUDA=ON -DSVO_BUILD_TESTS=ON
-cmake --build build-cuda
-ctest --test-dir build-cuda --output-on-failure
-```
+- `DeviceBuffer<T>` CUDA allocation/free works.
+- CPU to CUDA to CPU roundtrip test passes.
+- CUDA zero-size, move ownership, partial copy, and async stream-ordering tests pass.
+- `SVO_ENABLE_CUDA=ON` links `CUDA::cudart` (`libcudart.so.12`).
+- Public headers compile in both CPU-only and CUDA-enabled builds.
+- `compute-sanitizer --tool memcheck ./build-cuda/svo_device_buffer_test` reports 0 errors.
 
-Specific checks:
+Remaining design review:
 
-- Confirm `DeviceBuffer<T>` CUDA allocation/free works.
-- Confirm CPU to CUDA to CPU roundtrip test passes.
-- Confirm `SVO_ENABLE_CUDA=ON` correctly links `CUDA::cudart`.
-- Check that the public header compiles in both CPU-only and CUDA-enabled builds.
-- Run sanitizer or `compute-sanitizer` where available.
-- Review whether `DeviceBuffer<T>` should remain header-only or move CUDA implementation into `.cu/.cpp` to reduce CUDA header exposure for installed users.
+- Decide whether `DeviceBuffer<T>` should remain header-only or move CUDA implementation into `.cu/.cpp` to reduce CUDA header exposure for installed users.
 
 ## Milestone 5 Best-Practice Acceptance Checks
 
@@ -93,13 +100,11 @@ The TODO contains a detailed checklist for Python/CUDA module quality. Important
 
 ## Recommended Next Steps
 
-1. Verify milestone 5 on the CUDA machine with `SVO_ENABLE_CUDA=ON`.
-2. If CUDA build fails because `DeviceBuffer.hpp` includes CUDA runtime headers from a public header, consider splitting implementation into a private CUDA translation unit while preserving the public template API.
-3. Once milestone 5 passes on GPU, update `TODO.md` to mark CUDA allocation/copy and GPU runner acceptance complete.
-4. Start milestone 6: CUDA point query.
-5. Implement `query_points_cuda` by mirroring the CPU traversal result exactly, then compare against CPU reference tests on deterministic and random trees.
-6. Add stream-aware launcher APIs before exposing Python GPU bindings.
-7. Delay Torch integration until the raw C++/CUDA query path is correct and tested.
+1. Decide whether to keep `DeviceBuffer<T>` header-only or move CUDA implementation into a private `.cu/.cpp` translation unit.
+2. Start milestone 6: CUDA point query.
+3. Implement `query_points_cuda` by mirroring the CPU traversal result exactly, then compare against CPU reference tests on deterministic and random trees.
+4. Add stream-aware launcher APIs before exposing Python GPU bindings.
+5. Delay Torch integration until the raw C++/CUDA query path is correct and tested.
 
 ## Design Constraints To Preserve
 

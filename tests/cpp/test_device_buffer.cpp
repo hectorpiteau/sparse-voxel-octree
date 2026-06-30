@@ -107,6 +107,72 @@ void test_cuda_buffer_if_enabled() {
 #endif
 }
 
+void test_cuda_zero_size_buffer_if_enabled() {
+#if SVO_ENABLE_CUDA
+  svo::DeviceBuffer<int> buffer(0, svo::Device::CUDA);
+  require(buffer.empty(), "zero-size CUDA allocation should be empty");
+  require(buffer.size_bytes() == 0, "zero-size CUDA allocation should have no bytes");
+  require(buffer.device() == svo::Device::CUDA, "zero-size CUDA allocation should preserve requested device");
+  require(buffer.data() == nullptr, "zero-size CUDA allocation should not expose data");
+#endif
+}
+
+void test_cuda_move_buffer_if_enabled() {
+#if SVO_ENABLE_CUDA
+  const std::vector<std::uint32_t> source{13u, 21u, 34u, 55u};
+  svo::DeviceBuffer<std::uint32_t> buffer =
+      svo::DeviceBuffer<std::uint32_t>::from_host(source, svo::Device::CUDA);
+
+  svo::DeviceBuffer<std::uint32_t> moved(std::move(buffer));
+  require(buffer.empty(), "moved-from CUDA buffer should be empty");
+  require(moved.device() == svo::Device::CUDA, "moved CUDA buffer should preserve device");
+  require(moved.to_host() == source, "CUDA move constructor should preserve contents");
+
+  svo::DeviceBuffer<std::uint32_t> assigned;
+  assigned = std::move(moved);
+  require(moved.empty(), "move-assigned CUDA source buffer should be empty");
+  require(assigned.device() == svo::Device::CUDA, "move-assigned CUDA buffer should preserve device");
+  require(assigned.to_host() == source, "CUDA move assignment should preserve contents");
+#endif
+}
+
+void test_cuda_partial_copy_if_enabled() {
+#if SVO_ENABLE_CUDA
+  const std::vector<int> zeroes{0, 0, 0, 0, 0, 0};
+  const std::vector<int> prefix{8, 6, 7};
+  const std::vector<int> expected{8, 6, 7, 0, 0, 0};
+
+  svo::DeviceBuffer<int> buffer = svo::DeviceBuffer<int>::from_host(zeroes, svo::Device::CUDA);
+  buffer.copy_from_host(prefix.data(), prefix.size());
+
+  require(buffer.to_host() == expected, "partial CUDA host-to-device copy mismatch");
+#endif
+}
+
+void test_cuda_async_stream_ordering_if_enabled() {
+#if SVO_ENABLE_CUDA
+  const std::vector<int> source{2, 7, 1, 8, 2, 8};
+  std::vector<int> destination(source.size(), 0);
+
+  cudaStream_t stream = nullptr;
+  cudaError_t result = cudaStreamCreate(&stream);
+  require(result == cudaSuccess, std::string("cudaStreamCreate failed: ") + cudaGetErrorString(result));
+
+  {
+    svo::DeviceBuffer<int> buffer(source.size(), svo::Device::CUDA);
+    buffer.copy_from_host(source.data(), source.size(), stream);
+    buffer.copy_to_host(destination.data(), destination.size(), stream);
+    result = cudaStreamSynchronize(stream);
+    require(result == cudaSuccess, std::string("cudaStreamSynchronize failed: ") + cudaGetErrorString(result));
+  }
+
+  result = cudaStreamDestroy(stream);
+  require(result == cudaSuccess, std::string("cudaStreamDestroy failed: ") + cudaGetErrorString(result));
+  require(destination == source, "CUDA async stream-ordered roundtrip mismatch");
+#endif
+}
+
+
 }  // namespace
 
 int main() {
@@ -121,5 +187,9 @@ int main() {
   test_bounds_checks();
   test_large_cpu_buffer();
   test_cuda_buffer_if_enabled();
+  test_cuda_zero_size_buffer_if_enabled();
+  test_cuda_move_buffer_if_enabled();
+  test_cuda_partial_copy_if_enabled();
+  test_cuda_async_stream_ordering_if_enabled();
   return 0;
 }
