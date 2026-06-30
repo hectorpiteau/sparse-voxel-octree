@@ -2,7 +2,9 @@
 
 __version__ = "0.1.0"
 
-__all__ = ["__version__", "build_info", "cuda_enabled"]
+from ._svo import Octree, ValidationError, cuda_enabled
+
+__all__ = ["__version__", "Octree", "ValidationError", "build_info", "cuda_enabled"]
 
 
 def build_info():

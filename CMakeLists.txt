@@ -7,6 +7,8 @@ project(
   LANGUAGES CXX
 )
 
+include(GNUInstallDirs)
+
 option(SVO_ENABLE_CUDA "Enable CUDA components" OFF)
 option(SVO_ENABLE_PYTHON "Enable Python packaging hooks" ON)
 option(SVO_ENABLE_TORCH "Enable PyTorch integration hooks" OFF)
@@ -39,6 +41,7 @@ target_include_directories(
 )
 
 target_compile_features(svo_core PUBLIC cxx_std_17)
+set_target_properties(svo_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_definitions(
   svo_core
   PUBLIC
@@ -59,6 +62,24 @@ install(
 install(DIRECTORY include/svo DESTINATION include)
 install(DIRECTORY third_party/glm/glm DESTINATION include)
 install(FILES third_party/glm/copying.txt DESTINATION share/licenses/glm)
+
+if(SVO_ENABLE_PYTHON)
+  find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
+  add_subdirectory(third_party/pybind11)
+
+  pybind11_add_module(_svo MODULE python/bindings.cpp)
+  target_link_libraries(_svo PRIVATE svo_core)
+  target_include_directories(
+    _svo
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm
+  )
+  target_compile_features(_svo PRIVATE cxx_std_17)
+
+  install(TARGETS _svo LIBRARY DESTINATION svo RUNTIME DESTINATION svo)
+  install(FILES third_party/pybind11/LICENSE DESTINATION share/licenses/pybind11)
+endif()
 
 install(
   EXPORT svoTargets

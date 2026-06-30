@@ -189,27 +189,27 @@ Goal: expose the core CPU octree API to Python.
 
 ### Tasks
 
-- [ ] Add `pybind11` or `nanobind`.
-- [ ] Bind `Octree`.
-- [ ] Bind `Octree.from_voxels`.
-- [ ] Bind `Octree.query`.
-- [ ] Bind properties:
-  - [ ] `max_depth`
-  - [ ] `num_nodes`
-  - [ ] `num_leaves`
-  - [ ] `device`
-  - [ ] `root_bounds`
-- [ ] Support NumPy input for CPU build.
-- [ ] Support NumPy input for CPU query.
-- [ ] Add clear dtype and shape errors.
-- [ ] Add docstrings.
+- [x] Add `pybind11` or `nanobind`.
+- [x] Bind `Octree`.
+- [x] Bind `Octree.from_voxels`.
+- [x] Bind `Octree.query`.
+- [x] Bind properties:
+  - [x] `max_depth`
+  - [x] `num_nodes`
+  - [x] `num_leaves`
+  - [x] `device`
+  - [x] `root_bounds`
+- [x] Support NumPy input for CPU build.
+- [x] Support NumPy input for CPU query.
+- [x] Add clear dtype and shape errors.
+- [x] Add docstrings.
 
 ### Acceptance criteria
 
-- [ ] `uv sync` builds extension.
-- [ ] `import svo` works.
-- [ ] Python CPU examples work.
-- [ ] Bad input errors are readable.
+- [x] `uv sync` builds extension.
+- [x] `import svo` works.
+- [x] Python CPU examples work.
+- [x] Bad input errors are readable.
 
 ---
 

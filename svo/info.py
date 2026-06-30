@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
-from importlib.util import find_spec
-
 from . import __version__
-
-
-def cuda_enabled() -> bool:
-    return False
+from ._svo import cuda_enabled
 
 
 def build_info() -> dict[str, object]:
     return {
         "version": __version__,
         "cuda_enabled": cuda_enabled(),
-        "torch_available": find_spec("torch") is not None,
+        "torch_available": False,
     }
 
 

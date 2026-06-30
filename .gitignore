@@ -22,3 +22,5 @@ cmake-build-*/
 
 examples/data/
 third_party/glm/doc/
+third_party/pybind11/.github/
+third_party/pybind11/docs/
