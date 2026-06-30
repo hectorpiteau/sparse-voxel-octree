@@ -219,31 +219,43 @@ Goal: add safe CPU/GPU memory management.
 
 ### Tasks
 
-- [ ] Add `DeviceBuffer<T>`.
-- [ ] Support CPU allocation.
-- [ ] Support CUDA allocation when enabled.
-- [ ] Add copy CPU to CUDA.
-- [ ] Add copy CUDA to CPU.
-- [ ] Add move semantics.
-- [ ] Disable unsafe copying.
-- [ ] Add stream-aware copy APIs.
-- [ ] Add memory size reporting.
-- [ ] Add debug bounds metadata.
+- [x] Add `DeviceBuffer<T>`.
+- [x] Support CPU allocation.
+- [x] Support CUDA allocation when enabled.
+- [x] Add copy CPU to CUDA.
+- [x] Add copy CUDA to CPU.
+- [x] Add move semantics.
+- [x] Disable unsafe copying.
+- [x] Add stream-aware copy APIs.
+- [x] Add memory size reporting.
+- [x] Add debug bounds metadata.
 
 ### Tests
 
-- [ ] Allocate/free CPU.
-- [ ] Allocate/free CUDA.
-- [ ] Copy CPU to CUDA to CPU.
-- [ ] Move buffer.
-- [ ] Zero-size buffer.
-- [ ] Large buffer smoke test.
+- [x] Allocate/free CPU.
+- [ ] Allocate/free CUDA. Guarded test exists; requires CUDA runner.
+- [ ] Copy CPU to CUDA to CPU. Guarded test exists; requires CUDA runner.
+- [x] Move buffer.
+- [x] Zero-size buffer.
+- [x] Large buffer smoke test.
 
 ### Acceptance criteria
 
 - [ ] No leaks under sanitizer where available.
 - [ ] CUDA buffer tests pass on GPU runner.
-- [ ] CPU-only build still works.
+- [x] CPU-only build still works.
+- [ ] Python-facing CUDA APIs avoid implicit host synchronization except when explicitly requested (manual check: review binding code for `cudaDeviceSynchronize`, default-stream synchronization, blocking tensor transfers, and document any intentional sync).
+- [ ] Python bindings accept existing GPU memory without unnecessary host roundtrips.
+- [ ] Stream ownership is explicit: callers can pass/use the current stream, and async copies document lifetime requirements (manual check: review API docs and call sites for stream/lifetime ownership rules).
+- [ ] Host-to-device copies support pinned host memory for large transfers or clearly document when pageable memory is used (manual check: review transfer APIs and docs for pinned/pageable behavior).
+- [ ] Device allocations are amortized or reusable on hot paths; per-call allocation is avoided in query/render loops (manual check: profile allocation counts and review hot-path code).
+- [ ] CPU fallback paths remain available and do not import or require CUDA/Torch unless the CUDA/Torch layer is enabled.
+- [ ] Errors from CUDA calls preserve the original CUDA error string and include the operation name.
+- [ ] Python bindings release the GIL around long-running C++/CUDA work (manual check: review pybind wrappers for `py::gil_scoped_release` around blocking or launch-heavy calls).
+- [ ] Tensor/array inputs validate dtype, shape, contiguity, device, and lifetime before launching kernels.
+- [ ] GPU outputs have deterministic ownership semantics and do not expose dangling views (manual check: review returned tensor/array ownership and lifetime relationships).
+- [ ] Benchmarks cover transfer latency separately from kernel latency.
+- [ ] Tests include asynchronous copy behavior, stream ordering, and mixed CPU/GPU misuse errors.
 
 ---
 

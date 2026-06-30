@@ -10,7 +10,7 @@ project(
 include(GNUInstallDirs)
 
 option(SVO_ENABLE_CUDA "Enable CUDA components" OFF)
-option(SVO_ENABLE_PYTHON "Enable Python packaging hooks" ON)
+option(SVO_ENABLE_PYTHON "Enable Python packaging hooks" OFF)
 option(SVO_ENABLE_TORCH "Enable PyTorch integration hooks" OFF)
 option(SVO_BUILD_TESTS "Build C++ smoke tests" ON)
 
@@ -23,6 +23,7 @@ if(SVO_ENABLE_CUDA)
   check_language(CUDA)
   if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
   else()
     message(WARNING "SVO_ENABLE_CUDA=ON but no CUDA compiler was found; disabling CUDA targets.")
     set(SVO_ENABLE_CUDA OFF)
@@ -50,6 +51,10 @@ target_compile_definitions(
     SVO_VERSION_PATCH=${PROJECT_VERSION_PATCH}
     SVO_ENABLE_CUDA=$<BOOL:${SVO_ENABLE_CUDA}>
 )
+
+if(SVO_ENABLE_CUDA)
+  target_link_libraries(svo_core PUBLIC CUDA::cudart)
+endif()
 
 install(
   TARGETS svo_core
@@ -100,6 +105,10 @@ if(BUILD_TESTING AND SVO_BUILD_TESTS)
   add_executable(svo_query_test tests/cpp/test_query.cpp)
   target_link_libraries(svo_query_test PRIVATE svo_core)
   add_test(NAME svo_query_test COMMAND svo_query_test)
+
+  add_executable(svo_device_buffer_test tests/cpp/test_device_buffer.cpp)
+  target_link_libraries(svo_device_buffer_test PRIVATE svo_core)
+  add_test(NAME svo_device_buffer_test COMMAND svo_device_buffer_test)
 
   add_executable(svo_public_headers_test tests/cpp/test_public_headers.cpp)
   target_link_libraries(svo_public_headers_test PRIVATE svo_core)

@@ -11,7 +11,7 @@ requires-python = ">=3.9"
 dependencies = ["numpy>=1.23"]
 license = { file = "LICENSE" }
 authors = [
-  { name = "Sparse Voxel Octree Contributors" }
+  { name = "Hector Piteau", email = "hector.piteau@gmail.com" }
 ]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
@@ -40,3 +40,6 @@ default-groups = []
 cmake.version = ">=3.24"
 build-dir = "build/{wheel_tag}"
 wheel.packages = ["svo"]
+
+[tool.scikit-build.cmake.define]
+SVO_ENABLE_PYTHON = "ON"

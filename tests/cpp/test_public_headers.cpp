@@ -1,4 +1,5 @@
 #include <svo/Builder.hpp>
+#include <svo/DeviceBuffer.hpp>
 #include <svo/Error.hpp>
 #include <svo/Math.hpp>
 #include <svo/Octree.hpp>
@@ -15,6 +16,7 @@ int main() {
   svo::BuildOptions build_options;
   svo::QueryOptions query_options;
   svo::RenderOptions render_options;
+  svo::DeviceBuffer<int> buffer(1);
   svo::NodeDescriptor descriptor =
       svo::NodeDescriptor::pack(0b00000001u, 0b00000001u, 0u, 0u);
   svo::Octree octree{
@@ -27,6 +29,7 @@ int main() {
   (void)build_options;
   (void)query_options;
   (void)render_options;
+  (void)buffer;
   (void)descriptor;
   (void)octree;
 
