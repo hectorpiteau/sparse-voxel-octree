@@ -65,7 +65,7 @@ install(FILES third_party/glm/copying.txt DESTINATION share/licenses/glm)
 
 if(SVO_ENABLE_PYTHON)
   find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
-  add_subdirectory(third_party/pybind11)
+  find_package(pybind11 CONFIG REQUIRED)
 
   pybind11_add_module(_svo MODULE python/bindings.cpp)
   target_link_libraries(_svo PRIVATE svo_core)
@@ -78,7 +78,6 @@ if(SVO_ENABLE_PYTHON)
   target_compile_features(_svo PRIVATE cxx_std_17)
 
   install(TARGETS _svo LIBRARY DESTINATION svo RUNTIME DESTINATION svo)
-  install(FILES third_party/pybind11/LICENSE DESTINATION share/licenses/pybind11)
 endif()
 
 install(
