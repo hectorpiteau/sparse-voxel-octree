@@ -10,6 +10,10 @@
 #include <type_traits>
 #include <vector>
 
+#if SVO_ENABLE_CUDA
+#include <cuda_runtime_api.h>
+#endif
+
 namespace {
 
 void require(bool condition, const std::string& message) {
@@ -18,6 +22,31 @@ void require(bool condition, const std::string& message) {
     std::exit(1);
   }
 }
+
+
+#if SVO_ENABLE_CUDA
+class TestCudaStream {
+ public:
+  TestCudaStream() {
+    const cudaError_t result = cudaStreamCreate(&stream_);
+    require(result == cudaSuccess, std::string("cudaStreamCreate failed: ") + cudaGetErrorString(result));
+  }
+
+  ~TestCudaStream() {
+    if (stream_ != nullptr) {
+      (void)cudaStreamDestroy(stream_);
+    }
+  }
+
+  TestCudaStream(const TestCudaStream&) = delete;
+  TestCudaStream& operator=(const TestCudaStream&) = delete;
+
+  cudaStream_t get() const noexcept { return stream_; }
+
+ private:
+  cudaStream_t stream_ = nullptr;
+};
+#endif
 
 void test_zero_size_cpu_buffer() {
   svo::DeviceBuffer<int> buffer;
@@ -169,21 +198,16 @@ void test_cuda_async_stream_ordering_if_enabled() {
 #if SVO_ENABLE_CUDA
   const std::vector<int> source{2, 7, 1, 8, 2, 8};
   std::vector<int> destination(source.size(), 0);
-
-  cudaStream_t stream = nullptr;
-  cudaError_t result = cudaStreamCreate(&stream);
-  require(result == cudaSuccess, std::string("cudaStreamCreate failed: ") + cudaGetErrorString(result));
+  TestCudaStream stream;
 
   {
     svo::DeviceBuffer<int> buffer(source.size(), svo::Device::CUDA);
-    buffer.copy_from_host(source.data(), source.size(), stream);
-    buffer.copy_to_host(destination.data(), destination.size(), stream);
-    result = cudaStreamSynchronize(stream);
+    buffer.copy_from_host(source.data(), source.size(), stream.get());
+    buffer.copy_to_host(destination.data(), destination.size(), stream.get());
+    const cudaError_t result = cudaStreamSynchronize(stream.get());
     require(result == cudaSuccess, std::string("cudaStreamSynchronize failed: ") + cudaGetErrorString(result));
   }
 
-  result = cudaStreamDestroy(stream);
-  require(result == cudaSuccess, std::string("cudaStreamDestroy failed: ") + cudaGetErrorString(result));
   require(destination == source, "CUDA async stream-ordered roundtrip mismatch");
 #endif
 }

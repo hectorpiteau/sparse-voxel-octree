@@ -255,7 +255,9 @@ Goal: add safe CPU/GPU memory management.
 - [ ] Tensor/array inputs validate dtype, shape, contiguity, device, and lifetime before launching kernels.
 - [ ] GPU outputs have deterministic ownership semantics and do not expose dangling views (manual check: review returned tensor/array ownership and lifetime relationships).
 - [ ] Benchmarks cover transfer latency separately from kernel latency.
-- [x] Tests include asynchronous copy behavior, stream ordering, and mixed CPU/GPU misuse errors.
+- [x] Tests include asynchronous copy behavior and stream ordering.
+- [x] Tests include CUDA-disabled misuse errors.
+- [ ] Tests include mixed CPU/GPU misuse errors once APIs expose meaningful mixed-device operations.
 
 ---
 
@@ -270,14 +272,14 @@ Goal: address small code cleanliness and architecture issues before adding CUDA 
   - Commit `device_`, `size_`, `cpu_storage_`, and `cuda_data_` only after allocation succeeds.
   - Preserve the existing buffer when a new allocation fails, or clearly document/reset behavior if preserving is intentionally not supported.
   - Add a focused test if practical, especially for CPU allocation failure or a small injected failure path.
-- [ ] Stop relying on transitive CUDA includes in CUDA tests.
+- [x] Stop relying on transitive CUDA includes in CUDA tests.
   - Add an explicit `#if SVO_ENABLE_CUDA` guarded include of `<cuda_runtime_api.h>` in `tests/cpp/test_device_buffer.cpp`.
   - Keep `DeviceBuffer.hpp` free to hide or move CUDA implementation details later without breaking tests accidentally.
-- [ ] Replace manual CUDA stream cleanup in tests with a tiny RAII helper.
+- [x] Replace manual CUDA stream cleanup in tests with a tiny RAII helper.
   - Wrap `cudaStreamCreate` / `cudaStreamDestroy` in a local test-only helper under `#if SVO_ENABLE_CUDA`.
   - Make early `require()` failures after stream creation avoid leaking the stream during test exits where possible.
   - Keep the helper private to the test file unless another CUDA test needs it.
-- [ ] Clarify or complete the mixed CPU/GPU misuse checklist item.
+- [x] Clarify or complete the mixed CPU/GPU misuse checklist item.
   - Current coverage verifies CUDA-disabled misuse and async stream ordering, but not true mixed CPU/GPU misuse cases.
   - Either split the TODO checkbox into separate completed/open items, or add concrete tests for mixed-device misuse once APIs expose enough surface to make that meaningful.
   - Keep TODO wording precise so validation status does not overstate coverage.
