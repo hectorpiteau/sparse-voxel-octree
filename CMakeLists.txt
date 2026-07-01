@@ -53,6 +53,7 @@ target_compile_definitions(
 )
 
 if(SVO_ENABLE_CUDA)
+  target_sources(svo_core PRIVATE cuda/query_points.cu)
   target_link_libraries(svo_core PUBLIC CUDA::cudart)
 endif()
 
@@ -113,4 +114,10 @@ if(BUILD_TESTING AND SVO_BUILD_TESTS)
   add_executable(svo_public_headers_test tests/cpp/test_public_headers.cpp)
   target_link_libraries(svo_public_headers_test PRIVATE svo_core)
   add_test(NAME svo_public_headers_test COMMAND svo_public_headers_test)
+
+  if(SVO_ENABLE_CUDA)
+    add_executable(svo_query_cuda_test tests/cpp/test_query_cuda.cpp)
+    target_link_libraries(svo_query_cuda_test PRIVATE svo_core)
+    add_test(NAME svo_query_cuda_test COMMAND svo_query_cuda_test)
+  endif()
 endif()

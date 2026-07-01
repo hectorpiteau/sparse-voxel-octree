@@ -22,7 +22,6 @@
 
 namespace svo {
 
-using CudaStreamHandle = void*;
 
 template <typename T>
 class DeviceBuffer {

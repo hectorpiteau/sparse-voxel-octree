@@ -6,6 +6,14 @@
 
 #include <svo/Math.hpp>
 
+#ifndef SVO_HOST_DEVICE
+#if defined(__CUDACC__)
+#define SVO_HOST_DEVICE __host__ __device__
+#else
+#define SVO_HOST_DEVICE
+#endif
+#endif
+
 namespace svo {
 
 enum class Device : std::uint8_t {
@@ -14,6 +22,8 @@ enum class Device : std::uint8_t {
 };
 
 const char* device_name(Device device) noexcept;
+
+using CudaStreamHandle = void*;
 
 struct BuildOptions {
   int max_depth = 0;
@@ -46,10 +56,10 @@ class NodeDescriptor final {
   static constexpr std::uint64_t kChildBaseMask = (1ull << kChildBaseBits) - 1ull;
   static constexpr std::uint64_t kPayloadBaseMask = (1ull << kPayloadBaseBits) - 1ull;
 
-  constexpr NodeDescriptor() noexcept = default;
-  explicit constexpr NodeDescriptor(std::uint64_t bits) noexcept : bits_(bits) {}
+  SVO_HOST_DEVICE constexpr NodeDescriptor() noexcept = default;
+  SVO_HOST_DEVICE explicit constexpr NodeDescriptor(std::uint64_t bits) noexcept : bits_(bits) {}
 
-  static constexpr NodeDescriptor pack(
+  SVO_HOST_DEVICE static constexpr NodeDescriptor pack(
       std::uint8_t child_mask,
       std::uint8_t leaf_mask,
       std::uint32_t child_base,
@@ -61,25 +71,25 @@ class NodeDescriptor final {
         ((static_cast<std::uint64_t>(payload_base) & kPayloadBaseMask) << kPayloadBaseShift)};
   }
 
-  constexpr std::uint64_t bits() const noexcept { return bits_; }
+  SVO_HOST_DEVICE constexpr std::uint64_t bits() const noexcept { return bits_; }
 
-  constexpr std::uint8_t child_mask() const noexcept {
+  SVO_HOST_DEVICE constexpr std::uint8_t child_mask() const noexcept {
     return static_cast<std::uint8_t>((bits_ >> kChildMaskShift) & kChildMaskMask);
   }
 
-  constexpr std::uint8_t leaf_mask() const noexcept {
+  SVO_HOST_DEVICE constexpr std::uint8_t leaf_mask() const noexcept {
     return static_cast<std::uint8_t>((bits_ >> kLeafMaskShift) & kLeafMaskMask);
   }
 
-  constexpr std::uint32_t child_base() const noexcept {
+  SVO_HOST_DEVICE constexpr std::uint32_t child_base() const noexcept {
     return static_cast<std::uint32_t>((bits_ >> kChildBaseShift) & kChildBaseMask);
   }
 
-  constexpr std::uint32_t payload_base() const noexcept {
+  SVO_HOST_DEVICE constexpr std::uint32_t payload_base() const noexcept {
     return static_cast<std::uint32_t>((bits_ >> kPayloadBaseShift) & kPayloadBaseMask);
   }
 
-  constexpr std::uint8_t internal_child_mask() const noexcept {
+  SVO_HOST_DEVICE constexpr std::uint8_t internal_child_mask() const noexcept {
     return static_cast<std::uint8_t>(child_mask() & static_cast<std::uint8_t>(~leaf_mask()));
   }
 

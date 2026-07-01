@@ -290,30 +290,30 @@ Goal: implement batched point queries on GPU.
 
 ### Tasks
 
-- [ ] Add CUDA kernel `query_points_cuda`.
-- [ ] Add C++ launcher.
-- [ ] Add stream support.
+- [x] Add CUDA kernel `query_points_cuda`.
+- [x] Add C++ launcher.
+- [x] Add stream support.
 - [ ] Add Python binding accepting Torch CUDA tensors, if Torch layer is enabled.
 - [ ] Add Python binding accepting raw CUDA arrays later if desired.
 - [ ] Return `torch.int64` or `torch.int32` leaf IDs.
-- [ ] Compare CUDA result with CPU reference.
+- [x] Compare CUDA result with CPU reference.
 
 ### Tests
 
-- [ ] Small deterministic tree.
-- [ ] Random tree.
-- [ ] Large batch of points.
-- [ ] Misses.
-- [ ] Boundary points.
+- [x] Small deterministic tree.
+- [x] Random tree.
+- [x] Large batch of points.
+- [x] Misses.
+- [x] Boundary points.
 - [ ] Non-contiguous tensor should fail clearly.
 - [ ] Wrong dtype should fail clearly.
-- [ ] CPU vs CUDA agreement.
+- [x] CPU vs CUDA agreement.
 
 ### Acceptance criteria
 
-- [ ] CUDA query matches CPU reference.
+- [x] CUDA query matches CPU reference.
 - [ ] Query performance is measured with a benchmark script.
-- [ ] No CUDA errors under normal use.
+- [x] No CUDA errors under normal use.
 
 ---
 
