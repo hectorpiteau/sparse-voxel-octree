@@ -1,5 +1,12 @@
 # Sparse Voxel Octree CUDA
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/d6cd63fe-c4c8-4abd-92f6-e7ad734972bd">
+  <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/a5d8303a-4519-4af8-853d-fab9667387aa">
+
+  <img alt="Fallback image description" src="https://github.com/user-attachments/assets/a5d8303a-4519-4af8-853d-fab9667387aa">
+</picture>
+
 A C++/CUDA sparse voxel octree library with Python bindings and optional PyTorch autograd integration.
 
 This project is intended to become both:
