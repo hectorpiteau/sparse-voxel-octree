@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -54,6 +55,21 @@ void test_move_buffer() {
   assigned = std::move(moved);
   require(moved.empty(), "move-assigned source buffer should be empty");
   require(assigned.to_host() == source, "move assignment should preserve contents");
+}
+
+void test_failed_cpu_allocate_preserves_existing_buffer() {
+  const std::vector<int> source{4, 2, 0};
+  svo::DeviceBuffer<int> buffer = svo::DeviceBuffer<int>::from_host(source, svo::Device::CPU);
+
+  try {
+    buffer.allocate(std::numeric_limits<std::size_t>::max(), svo::Device::CPU);
+    require(false, "oversized CPU allocation should fail");
+  } catch (const std::exception&) {
+  }
+
+  require(buffer.device() == svo::Device::CPU, "failed CPU allocation should preserve device");
+  require(buffer.size() == source.size(), "failed CPU allocation should preserve size");
+  require(buffer.to_host() == source, "failed CPU allocation should preserve contents");
 }
 
 void test_bounds_checks() {
@@ -172,7 +188,6 @@ void test_cuda_async_stream_ordering_if_enabled() {
 #endif
 }
 
-
 }  // namespace
 
 int main() {
@@ -184,6 +199,7 @@ int main() {
   test_zero_size_cpu_buffer();
   test_cpu_allocate_and_copy();
   test_move_buffer();
+  test_failed_cpu_allocate_preserves_existing_buffer();
   test_bounds_checks();
   test_large_cpu_buffer();
   test_cuda_buffer_if_enabled();

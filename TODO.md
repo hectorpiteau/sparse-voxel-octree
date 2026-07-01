@@ -259,6 +259,29 @@ Goal: add safe CPU/GPU memory management.
 
 ---
 
+## Pre-Milestone 6 cleanup — DeviceBuffer review follow-ups
+
+Goal: address small code cleanliness and architecture issues before adding CUDA point query code.
+
+### Tasks
+
+- [x] Make `DeviceBuffer::allocate` exception-safe.
+  - Allocate CPU storage or CUDA memory into temporary state first.
+  - Commit `device_`, `size_`, `cpu_storage_`, and `cuda_data_` only after allocation succeeds.
+  - Preserve the existing buffer when a new allocation fails, or clearly document/reset behavior if preserving is intentionally not supported.
+  - Add a focused test if practical, especially for CPU allocation failure or a small injected failure path.
+- [ ] Stop relying on transitive CUDA includes in CUDA tests.
+  - Add an explicit `#if SVO_ENABLE_CUDA` guarded include of `<cuda_runtime_api.h>` in `tests/cpp/test_device_buffer.cpp`.
+  - Keep `DeviceBuffer.hpp` free to hide or move CUDA implementation details later without breaking tests accidentally.
+- [ ] Replace manual CUDA stream cleanup in tests with a tiny RAII helper.
+  - Wrap `cudaStreamCreate` / `cudaStreamDestroy` in a local test-only helper under `#if SVO_ENABLE_CUDA`.
+  - Make early `require()` failures after stream creation avoid leaking the stream during test exits where possible.
+  - Keep the helper private to the test file unless another CUDA test needs it.
+- [ ] Clarify or complete the mixed CPU/GPU misuse checklist item.
+  - Current coverage verifies CUDA-disabled misuse and async stream ordering, but not true mixed CPU/GPU misuse cases.
+  - Either split the TODO checkbox into separate completed/open items, or add concrete tests for mixed-device misuse once APIs expose enough surface to make that meaningful.
+  - Keep TODO wording precise so validation status does not overstate coverage.
+
 ## Milestone 6 — CUDA point query
 
 Goal: implement batched point queries on GPU.
@@ -633,6 +656,10 @@ Goal: improve performance after correctness is established.
 
 ### Tasks
 
+- [ ] Add explicit destructive/reuse allocation APIs for `DeviceBuffer`.
+  - Consider `reset`, `release_and_allocate`, or reusable capacity-style APIs for hot paths where double allocation is too expensive.
+  - Keep the current `allocate` strong-guarantee behavior as the safe default.
+  - Document whether destructive allocation preserves old contents, old capacity, stream ordering, and failure state.
 - [ ] Profile point query.
 - [ ] Profile raycast.
 - [ ] Profile rendering forward.

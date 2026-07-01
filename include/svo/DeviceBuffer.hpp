@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -63,21 +64,31 @@ class DeviceBuffer {
   }
 
   void allocate(std::size_t size, Device device = Device::CPU) {
-    release();
-    device_ = device;
-    size_ = size;
+    (void)checked_size_bytes(size);
 
-    if (size_ == 0) {
+    if (size == 0) {
+      release();
+      device_ = device;
       return;
     }
 
-    switch (device_) {
-      case Device::CPU:
-        cpu_storage_.resize(size_);
+    switch (device) {
+      case Device::CPU: {
+        std::vector<T> storage(size);
+        release();
+        cpu_storage_ = std::move(storage);
+        size_ = size;
+        device_ = Device::CPU;
         break;
-      case Device::CUDA:
-        allocate_cuda();
+      }
+      case Device::CUDA: {
+        T* cuda_data = allocate_cuda_storage(size);
+        release();
+        cuda_data_ = cuda_data;
+        size_ = size;
+        device_ = Device::CUDA;
         break;
+      }
     }
   }
 
@@ -166,18 +177,23 @@ class DeviceBuffer {
     other.cuda_data_ = nullptr;
   }
 
-  void allocate_cuda() {
+  static std::size_t checked_size_bytes(std::size_t size) {
+    if (size > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
+      throw ValidationError("DeviceBuffer byte size overflows size_t");
+    }
+    return size * sizeof(T);
+  }
+
+  static T* allocate_cuda_storage(std::size_t size) {
 #if SVO_ENABLE_CUDA
-    const cudaError_t result = cudaMalloc(reinterpret_cast<void**>(&cuda_data_), size_bytes());
+    T* cuda_data = nullptr;
+    const cudaError_t result = cudaMalloc(reinterpret_cast<void**>(&cuda_data), checked_size_bytes(size));
     if (result != cudaSuccess) {
-      cuda_data_ = nullptr;
-      size_ = 0;
-      device_ = Device::CPU;
       throw Error(std::string("cudaMalloc failed: ") + cudaGetErrorString(result));
     }
+    return cuda_data;
 #else
-    size_ = 0;
-    device_ = Device::CPU;
+    (void)size;
     throw ValidationError("CUDA DeviceBuffer requested but SVO_ENABLE_CUDA is disabled");
 #endif
   }
