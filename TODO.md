@@ -312,7 +312,7 @@ Goal: implement batched point queries on GPU.
 ### Acceptance criteria
 
 - [x] CUDA query matches CPU reference.
-- [ ] Query performance is measured with a benchmark script.
+- [x] Query performance is measured with a benchmark script.
 - [x] No CUDA errors under normal use.
 
 ---

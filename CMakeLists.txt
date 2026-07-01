@@ -55,6 +55,9 @@ target_compile_definitions(
 if(SVO_ENABLE_CUDA)
   target_sources(svo_core PRIVATE cuda/query_points.cu)
   target_link_libraries(svo_core PUBLIC CUDA::cudart)
+
+  add_executable(svo_point_query_benchmark benchmarks/cpp/point_query_benchmark.cpp)
+  target_link_libraries(svo_point_query_benchmark PRIVATE svo_core)
 endif()
 
 install(

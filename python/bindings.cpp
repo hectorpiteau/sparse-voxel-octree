@@ -130,7 +130,7 @@ std::string octree_repr(const svo::Octree& octree) {
 }  // namespace
 
 PYBIND11_MODULE(_svo, module) {
-  module.doc() = "CPU sparse voxel octree bindings.";
+  module.doc() = "Sparse voxel octree bindings.";
 
   py::register_exception<svo::Error>(module, "SvoError");
   py::register_exception<svo::ValidationError>(module, "ValidationError");
@@ -140,7 +140,9 @@ PYBIND11_MODULE(_svo, module) {
           "from_voxels",
           [](py::array coords, int max_depth, const std::string& device, py::object root_bounds) {
             if (device != "cpu") {
-              throw py::value_error("only device='cpu' is supported in milestone 4");
+              throw py::value_error(
+                  "Octree.from_voxels currently supports only device='cpu'; build on CPU and use "
+                  "Octree.to('cuda') once Python CUDA ownership is implemented");
             }
 
             svo::BuildOptions options;
@@ -183,6 +185,41 @@ Args:
 Returns:
     NumPy int32 array of shape (N,). Misses are encoded as -1.
 )pbdoc")
+      .def(
+          "to",
+          [](const svo::Octree& octree, const std::string& device) {
+            if (device == "cpu") {
+              return octree;
+            }
+            if (device == "cuda") {
+              throw py::type_error(
+                  "Octree.to('cuda') is reserved for the upcoming Python CUDA octree owner; "
+                  "the raw C++ query_points_cuda path exists, but Python CUDA ownership is not implemented yet");
+            }
+            throw py::value_error("device must be 'cpu' or 'cuda'");
+          },
+          py::arg("device"),
+          R"pbdoc(
+Return an octree on the requested device.
+
+Currently only device="cpu" is implemented. device="cuda" is reserved for the
+future Python CUDA owner that will avoid unnecessary host roundtrips.
+)pbdoc")
+      .def(
+          "query_cuda",
+          [](const svo::Octree&, py::object, bool) {
+            throw py::type_error(
+                "Octree.query_cuda is not implemented yet. Use the C++ query_points_cuda launcher "
+                "for CUDA point lookup until Python CUDA tensor ownership is added.");
+          },
+          py::arg("points"),
+          py::arg("return_payload_indices") = false,
+          R"pbdoc(
+Future CUDA point-query entry point.
+
+This placeholder keeps the Python API shape explicit while CUDA tensor ownership,
+stream handling, and dtype/contiguity validation are designed.
+)pbdoc")
       .def_property_readonly("max_depth", &svo::Octree::max_depth)
       .def_property_readonly("num_nodes", &svo::Octree::num_nodes)
       .def_property_readonly("num_leaves", &svo::Octree::num_leaves)
@@ -194,5 +231,14 @@ Returns:
           [](const svo::Octree& octree) { return root_bounds_to_numpy(octree.root_bounds()); })
       .def("__repr__", &octree_repr);
 
-  module.def("cuda_enabled", []() { return false; }, "Return whether the CUDA extension is available.");
+  module.def(
+      "cuda_enabled",
+      []() {
+#if SVO_ENABLE_CUDA
+        return true;
+#else
+        return false;
+#endif
+      },
+      "Return whether this extension was compiled with CUDA support.");
 }

@@ -65,5 +65,17 @@ def test_bad_inputs_raise_clear_errors() -> None:
     with pytest.raises(TypeError, match="points must have dtype float32 or float64"):
         tree.query(np.zeros((1, 3), dtype=np.int32))
 
-    with pytest.raises(ValueError, match="only device='cpu' is supported"):
+    with pytest.raises(ValueError, match="currently supports only device='cpu'"):
         svo.Octree.from_voxels(np.array([[0, 0, 0]], dtype=np.int32), max_depth=1, device="cuda")
+
+
+def test_cuda_api_placeholders_are_explicit() -> None:
+    tree = svo.Octree.from_voxels(np.array([[0, 0, 0]], dtype=np.int32), max_depth=1)
+
+    assert tree.to("cpu").device == "cpu"
+
+    with pytest.raises(TypeError, match="Python CUDA octree owner"):
+        tree.to("cuda")
+
+    with pytest.raises(TypeError, match="query_cuda is not implemented"):
+        tree.query_cuda(np.zeros((1, 3), dtype=np.float32))
