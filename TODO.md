@@ -391,34 +391,34 @@ Goal: implement GPU ray traversal.
 
 ### Tasks
 
-- [ ] Implement CUDA raycast kernel.
-- [ ] Use simple stack-based traversal first.
-- [ ] Add C++ launcher.
+- [x] Implement CUDA raycast kernel.
+- [x] Use simple stack-based traversal first.
+- [x] Add C++ launcher.
 - [ ] Add Python binding.
-- [ ] Add output tensors:
-  - [ ] hit mask
-  - [ ] leaf ID
-  - [ ] t
-  - [ ] position
-  - [ ] depth
-- [ ] Compare with CPU reference.
-- [ ] Add benchmark.
+- [x] Add output device buffers:
+  - [x] hit mask
+  - [x] leaf ID
+  - [x] t
+  - [x] position
+  - [x] depth
+- [x] Compare with CPU reference.
+- [x] Add benchmark.
 
 ### Tests
 
-- [ ] CPU vs CUDA raycast on tiny scenes.
-- [ ] CPU vs CUDA raycast on random sparse scenes.
-- [ ] Many rays.
-- [ ] Miss-heavy rays.
-- [ ] Hit-heavy rays.
-- [ ] Rays near boundaries.
-- [ ] Compute sanitizer run on GPU CI.
+- [x] CPU vs CUDA raycast on tiny scenes.
+- [x] CPU vs CUDA raycast on random sparse scenes.
+- [x] Many rays.
+- [x] Miss-heavy rays.
+- [x] Hit-heavy rays.
+- [x] Rays near boundaries.
+- [x] Compute sanitizer run locally; keep GPU CI sanitizer enabled when CI exists.
 
 ### Acceptance criteria
 
-- [ ] CUDA raycast matches CPU reference within tolerance.
-- [ ] Kernel handles large ray batches.
-- [ ] No invalid memory accesses under sanitizer.
+- [x] CUDA raycast matches CPU reference within tolerance.
+- [x] Kernel handles large ray batches.
+- [x] No invalid memory accesses under sanitizer.
 
 ---
 

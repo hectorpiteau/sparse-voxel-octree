@@ -53,11 +53,14 @@ target_compile_definitions(
 )
 
 if(SVO_ENABLE_CUDA)
-  target_sources(svo_core PRIVATE cuda/generate_rays.cu cuda/query_points.cu)
+  target_sources(svo_core PRIVATE cuda/generate_rays.cu cuda/query_points.cu cuda/raycast.cu)
   target_link_libraries(svo_core PUBLIC CUDA::cudart)
 
   add_executable(svo_point_query_benchmark benchmarks/cpp/point_query_benchmark.cpp)
   target_link_libraries(svo_point_query_benchmark PRIVATE svo_core)
+
+  add_executable(svo_raycast_benchmark benchmarks/cpp/raycast_benchmark.cpp)
+  target_link_libraries(svo_raycast_benchmark PRIVATE svo_core)
 endif()
 
 install(
@@ -130,6 +133,10 @@ if(BUILD_TESTING AND SVO_BUILD_TESTS)
     add_executable(svo_query_cuda_test tests/cpp/test_query_cuda.cpp)
     target_link_libraries(svo_query_cuda_test PRIVATE svo_core)
     add_test(NAME svo_query_cuda_test COMMAND svo_query_cuda_test)
+
+    add_executable(svo_raycast_cuda_test tests/cpp/test_raycast_cuda.cpp)
+    target_link_libraries(svo_raycast_cuda_test PRIVATE svo_core)
+    add_test(NAME svo_raycast_cuda_test COMMAND svo_raycast_cuda_test)
 
     add_executable(svo_camera_cuda_test tests/cpp/test_camera_cuda.cpp)
     target_link_libraries(svo_camera_cuda_test PRIVATE svo_core)
