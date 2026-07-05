@@ -1,4 +1,5 @@
 #include <svo/Builder.hpp>
+#include <svo/Camera.hpp>
 #include <svo/DeviceBuffer.hpp>
 #include <svo/Error.hpp>
 #include <svo/Math.hpp>
@@ -16,6 +17,14 @@ int main() {
   svo::BuildOptions build_options;
   svo::QueryOptions query_options;
   svo::RenderOptions render_options;
+  svo::CameraIntrinsics intrinsics{3, 3, 3.0f, 3.0f, 1.5f, 1.5f};
+  svo::Camera camera = svo::Camera::from_intrinsics(
+      {0.0f, 0.0f, 0.0f},
+      {0.0f, 0.0f, -1.0f},
+      {0.0f, 1.0f, 0.0f},
+      intrinsics,
+      svo::CameraConvention::OpenGL);
+  svo::RayBatch rays = svo::generate_rays_cpu(camera);
   svo::DeviceBuffer<int> buffer(1);
   svo::NodeDescriptor descriptor =
       svo::NodeDescriptor::pack(0b00000001u, 0b00000001u, 0u, 0u);
@@ -29,6 +38,9 @@ int main() {
   (void)build_options;
   (void)query_options;
   (void)render_options;
+  (void)intrinsics;
+  (void)camera;
+  (void)rays;
   (void)buffer;
   (void)descriptor;
   (void)octree;

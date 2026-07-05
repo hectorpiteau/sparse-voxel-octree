@@ -30,7 +30,7 @@ if(SVO_ENABLE_CUDA)
   endif()
 endif()
 
-add_library(svo_core STATIC src/Builder.cpp src/Octree.cpp src/Query.cpp src/Version.cpp)
+add_library(svo_core STATIC src/Builder.cpp src/Camera.cpp src/Octree.cpp src/Query.cpp src/Version.cpp)
 add_library(svo::core ALIAS svo_core)
 
 target_include_directories(
@@ -53,7 +53,7 @@ target_compile_definitions(
 )
 
 if(SVO_ENABLE_CUDA)
-  target_sources(svo_core PRIVATE cuda/query_points.cu)
+  target_sources(svo_core PRIVATE cuda/generate_rays.cu cuda/query_points.cu)
   target_link_libraries(svo_core PUBLIC CUDA::cudart)
 
   add_executable(svo_point_query_benchmark benchmarks/cpp/point_query_benchmark.cpp)
@@ -110,6 +110,10 @@ if(BUILD_TESTING AND SVO_BUILD_TESTS)
   target_link_libraries(svo_query_test PRIVATE svo_core)
   add_test(NAME svo_query_test COMMAND svo_query_test)
 
+  add_executable(svo_camera_test tests/cpp/test_camera.cpp)
+  target_link_libraries(svo_camera_test PRIVATE svo_core)
+  add_test(NAME svo_camera_test COMMAND svo_camera_test)
+
   add_executable(svo_device_buffer_test tests/cpp/test_device_buffer.cpp)
   target_link_libraries(svo_device_buffer_test PRIVATE svo_core)
   add_test(NAME svo_device_buffer_test COMMAND svo_device_buffer_test)
@@ -122,5 +126,9 @@ if(BUILD_TESTING AND SVO_BUILD_TESTS)
     add_executable(svo_query_cuda_test tests/cpp/test_query_cuda.cpp)
     target_link_libraries(svo_query_cuda_test PRIVATE svo_core)
     add_test(NAME svo_query_cuda_test COMMAND svo_query_cuda_test)
+
+    add_executable(svo_camera_cuda_test tests/cpp/test_camera_cuda.cpp)
+    target_link_libraries(svo_camera_cuda_test PRIVATE svo_core)
+    add_test(NAME svo_camera_cuda_test COMMAND svo_camera_cuda_test)
   endif()
 endif()

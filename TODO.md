@@ -293,9 +293,10 @@ Goal: implement batched point queries on GPU.
 - [x] Add CUDA kernel `query_points_cuda`.
 - [x] Add C++ launcher.
 - [x] Add stream support.
+- [x] Add Python binding for CUDA-owned octree topology and CPU NumPy point batches.
 - [ ] Add Python binding accepting Torch CUDA tensors, if Torch layer is enabled.
 - [ ] Add Python binding accepting raw CUDA arrays later if desired.
-- [ ] Return `torch.int64` or `torch.int32` leaf IDs.
+- [ ] Return `torch.int64` or `torch.int32` leaf IDs in the future Torch path.
 - [x] Compare CUDA result with CPU reference.
 
 ### Tests
@@ -305,8 +306,8 @@ Goal: implement batched point queries on GPU.
 - [x] Large batch of points.
 - [x] Misses.
 - [x] Boundary points.
-- [ ] Non-contiguous tensor should fail clearly.
-- [ ] Wrong dtype should fail clearly.
+- [x] Non-contiguous Python point inputs should fail clearly.
+- [x] Wrong dtype should fail clearly.
 - [x] CPU vs CUDA agreement.
 
 ### Acceptance criteria
@@ -323,28 +324,28 @@ Goal: define rays and camera ray generation.
 
 ### Tasks
 
-- [ ] Implement GLM-based camera helpers.
-- [ ] Support pinhole camera.
-- [ ] Support look-at constructor.
-- [ ] Support intrinsics matrix input.
-- [ ] Implement CPU ray generation.
-- [ ] Implement CUDA ray generation.
-- [ ] Use `glm::vec3` origin/direction arrays or tensors for ray batches.
-- [ ] Add tests for ray directions.
+- [x] Implement GLM-based camera helpers.
+- [x] Support pinhole camera.
+- [x] Support look-at constructor.
+- [x] Support intrinsics matrix input.
+- [x] Implement CPU ray generation.
+- [x] Implement CUDA ray generation.
+- [x] Use `glm::vec3` origin/direction arrays or tensors for ray batches.
+- [x] Add tests for ray directions.
 
 ### Tests
 
-- [ ] Center pixel points toward target.
-- [ ] Camera basis is orthonormal.
-- [ ] FOV affects ray spread.
-- [ ] CPU and CUDA ray generation match.
-- [ ] Invalid camera inputs fail.
+- [x] Center pixel points toward target.
+- [x] Camera basis is orthonormal.
+- [x] FOV affects ray spread.
+- [x] CPU and CUDA ray generation match.
+- [x] Invalid camera inputs fail.
 
 ### Acceptance criteria
 
-- [ ] Python can create a camera.
-- [ ] Python can generate rays.
-- [ ] C++ can generate rays.
+- [x] Python can create a camera.
+- [x] Python can generate rays.
+- [x] C++ can generate rays.
 
 ---
 
