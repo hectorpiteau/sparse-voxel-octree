@@ -30,7 +30,7 @@ if(SVO_ENABLE_CUDA)
   endif()
 endif()
 
-add_library(svo_core STATIC src/Builder.cpp src/Camera.cpp src/Octree.cpp src/Query.cpp src/Version.cpp)
+add_library(svo_core STATIC src/Builder.cpp src/Camera.cpp src/Octree.cpp src/Query.cpp src/Raycast.cpp src/Version.cpp)
 add_library(svo::core ALIAS svo_core)
 
 target_include_directories(
@@ -109,6 +109,10 @@ if(BUILD_TESTING AND SVO_BUILD_TESTS)
   add_executable(svo_query_test tests/cpp/test_query.cpp)
   target_link_libraries(svo_query_test PRIVATE svo_core)
   add_test(NAME svo_query_test COMMAND svo_query_test)
+
+  add_executable(svo_raycast_test tests/cpp/test_raycast.cpp)
+  target_link_libraries(svo_raycast_test PRIVATE svo_core)
+  add_test(NAME svo_raycast_test COMMAND svo_raycast_test)
 
   add_executable(svo_camera_test tests/cpp/test_camera.cpp)
   target_link_libraries(svo_camera_test PRIVATE svo_core)

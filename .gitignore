@@ -16,6 +16,7 @@ __pycache__/
 .tox/
 .venv/
 build/
+build-*/
 dist/
 cmake-build-*/
 .cache/

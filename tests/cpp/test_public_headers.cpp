@@ -5,6 +5,7 @@
 #include <svo/Math.hpp>
 #include <svo/Octree.hpp>
 #include <svo/Query.hpp>
+#include <svo/Raycast.hpp>
 #include <svo/Renderer.hpp>
 #include <svo/Version.hpp>
 
@@ -16,6 +17,7 @@ int main() {
 
   svo::BuildOptions build_options;
   svo::QueryOptions query_options;
+  svo::RaycastOptions raycast_options;
   svo::RenderOptions render_options;
   svo::CameraIntrinsics intrinsics{3, 3, 3.0f, 3.0f, 1.5f, 1.5f};
   svo::Camera camera = svo::Camera::from_intrinsics(
@@ -30,6 +32,7 @@ int main() {
       svo::NodeDescriptor::pack(0b00000001u, 0b00000001u, 0u, 0u);
   svo::Octree octree{
       1, svo::Device::CPU, svo::default_root_bounds(), {descriptor}, {0u}};
+  svo::RaycastBatch raycast_results = svo::raycast_cpu(octree, rays, raycast_options);
 
   octree.validate();
 
@@ -37,10 +40,12 @@ int main() {
   (void)points;
   (void)build_options;
   (void)query_options;
+  (void)raycast_options;
   (void)render_options;
   (void)intrinsics;
   (void)camera;
   (void)rays;
+  (void)raycast_results;
   (void)buffer;
   (void)descriptor;
   (void)octree;

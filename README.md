@@ -54,6 +54,12 @@ Which active cells should be sampled along this camera ray?
 
 The actual voxel payload should live in separate buffers or tensors.
 
+## CPU raycast behavior
+
+`Octree.raycast(origins, directions)` accepts NumPy ray batches shaped `(N, 3)` or `(H, W, 3)` and returns `(hit_mask, leaf_ids, t, positions, depths)` with matching leading dimensions. Directions are normalized internally, so `t` is distance along the normalized ray direction and hit positions are `origin + t * normalized_direction`.
+
+Misses use explicit sentinels: `hit_mask=false`, `leaf_id=-1`, `depth=-1`, `t=inf`, and `position=(nan, nan, nan)`. Boundary ties are deterministic: nearest `t` wins, then smaller leaf id.
+
 Example payloads:
 
 ```text

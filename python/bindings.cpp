@@ -14,6 +14,7 @@
 #include <svo/Error.hpp>
 #include <svo/Octree.hpp>
 #include <svo/Query.hpp>
+#include <svo/Raycast.hpp>
 
 namespace py = pybind11;
 
@@ -164,6 +165,150 @@ py::tuple ray_batch_to_numpy(const svo::RayBatch& rays) {
   }
 
   return py::make_tuple(origins, directions);
+}
+
+
+struct PythonRayBatch {
+  std::vector<glm::vec3> origins;
+  std::vector<glm::vec3> directions;
+  int width = 0;
+  int height = 0;
+  bool image_shaped = false;
+};
+
+void check_ray_array(const py::array& array, const char* name) {
+  if (!(py::isinstance<py::array_t<float>>(array) || py::isinstance<py::array_t<double>>(array))) {
+    throw py::type_error(std::string(name) + " must have dtype float32 or float64");
+  }
+  if (!is_c_contiguous(array)) {
+    throw py::value_error(std::string(name) + " must be C-contiguous");
+  }
+  const bool flat = array.ndim() == 2 && array.shape(1) == 3;
+  const bool image = array.ndim() == 3 && array.shape(2) == 3;
+  if (!flat && !image) {
+    throw py::value_error(std::string(name) + " must have shape (N, 3) or (H, W, 3)");
+  }
+}
+
+std::vector<glm::vec3> ray_vectors_from_numpy(const py::array& array) {
+  std::vector<glm::vec3> values;
+  const py::ssize_t count = array.ndim() == 2 ? array.shape(0) : array.shape(0) * array.shape(1);
+  values.reserve(static_cast<std::size_t>(count));
+
+  if (py::isinstance<py::array_t<float>>(array)) {
+    py::array_t<float, py::array::c_style> cast(array);
+    if (array.ndim() == 2) {
+      auto view = cast.unchecked<2>();
+      for (py::ssize_t index = 0; index < view.shape(0); ++index) {
+        values.emplace_back(view(index, 0), view(index, 1), view(index, 2));
+      }
+    } else {
+      auto view = cast.unchecked<3>();
+      for (py::ssize_t y = 0; y < view.shape(0); ++y) {
+        for (py::ssize_t x = 0; x < view.shape(1); ++x) {
+          values.emplace_back(view(y, x, 0), view(y, x, 1), view(y, x, 2));
+        }
+      }
+    }
+  } else {
+    py::array_t<double, py::array::c_style> cast(array);
+    if (array.ndim() == 2) {
+      auto view = cast.unchecked<2>();
+      for (py::ssize_t index = 0; index < view.shape(0); ++index) {
+        values.emplace_back(
+            static_cast<float>(view(index, 0)),
+            static_cast<float>(view(index, 1)),
+            static_cast<float>(view(index, 2)));
+      }
+    } else {
+      auto view = cast.unchecked<3>();
+      for (py::ssize_t y = 0; y < view.shape(0); ++y) {
+        for (py::ssize_t x = 0; x < view.shape(1); ++x) {
+          values.emplace_back(
+              static_cast<float>(view(y, x, 0)),
+              static_cast<float>(view(y, x, 1)),
+              static_cast<float>(view(y, x, 2)));
+        }
+      }
+    }
+  }
+
+  return values;
+}
+
+PythonRayBatch rays_from_numpy(py::array origins, py::array directions) {
+  check_ray_array(origins, "origins");
+  check_ray_array(directions, "directions");
+  if (origins.ndim() != directions.ndim()) {
+    throw py::value_error("origins and directions must have the same shape");
+  }
+  for (py::ssize_t axis = 0; axis < origins.ndim(); ++axis) {
+    if (origins.shape(axis) != directions.shape(axis)) {
+      throw py::value_error("origins and directions must have the same shape");
+    }
+  }
+
+  PythonRayBatch rays;
+  rays.image_shaped = origins.ndim() == 3;
+  rays.height = rays.image_shaped ? static_cast<int>(origins.shape(0)) : 1;
+  rays.width = rays.image_shaped ? static_cast<int>(origins.shape(1)) : static_cast<int>(origins.shape(0));
+  rays.origins = ray_vectors_from_numpy(origins);
+  rays.directions = ray_vectors_from_numpy(directions);
+  return rays;
+}
+
+py::tuple raycast_batch_to_numpy(const svo::RaycastBatch& results, bool image_shaped) {
+  if (image_shaped) {
+    py::array_t<bool> hit_mask({results.height, results.width});
+    py::array_t<std::int32_t> leaf_ids({results.height, results.width});
+    py::array_t<float> t({results.height, results.width});
+    py::array_t<float> positions({results.height, results.width, 3});
+    py::array_t<std::int32_t> depths({results.height, results.width});
+    auto hit_view = hit_mask.mutable_unchecked<2>();
+    auto leaf_view = leaf_ids.mutable_unchecked<2>();
+    auto t_view = t.mutable_unchecked<2>();
+    auto position_view = positions.mutable_unchecked<3>();
+    auto depth_view = depths.mutable_unchecked<2>();
+
+    for (int y = 0; y < results.height; ++y) {
+      for (int x = 0; x < results.width; ++x) {
+        const std::size_t index = static_cast<std::size_t>(y) * static_cast<std::size_t>(results.width) +
+            static_cast<std::size_t>(x);
+        hit_view(y, x) = results.hit_mask[index] != 0u;
+        leaf_view(y, x) = results.leaf_ids[index];
+        t_view(y, x) = results.t[index];
+        depth_view(y, x) = results.depths[index];
+        for (int axis = 0; axis < 3; ++axis) {
+          position_view(y, x, axis) = results.positions[index][axis];
+        }
+      }
+    }
+    return py::make_tuple(hit_mask, leaf_ids, t, positions, depths);
+  }
+
+  const py::ssize_t count = static_cast<py::ssize_t>(results.hit_mask.size());
+  py::array_t<bool> hit_mask(count);
+  py::array_t<std::int32_t> leaf_ids(count);
+  py::array_t<float> t(count);
+  py::array_t<float> positions({count, static_cast<py::ssize_t>(3)});
+  py::array_t<std::int32_t> depths(count);
+  auto hit_view = hit_mask.mutable_unchecked<1>();
+  auto leaf_view = leaf_ids.mutable_unchecked<1>();
+  auto t_view = t.mutable_unchecked<1>();
+  auto position_view = positions.mutable_unchecked<2>();
+  auto depth_view = depths.mutable_unchecked<1>();
+
+  for (py::ssize_t index = 0; index < count; ++index) {
+    const std::size_t result_index = static_cast<std::size_t>(index);
+    hit_view(index) = results.hit_mask[result_index] != 0u;
+    leaf_view(index) = results.leaf_ids[result_index];
+    t_view(index) = results.t[result_index];
+    depth_view(index) = results.depths[result_index];
+    for (int axis = 0; axis < 3; ++axis) {
+      position_view(index, axis) = results.positions[result_index][axis];
+    }
+  }
+  return py::make_tuple(hit_mask, leaf_ids, t, positions, depths);
 }
 
 
@@ -365,6 +510,35 @@ Args:
 
 Returns:
     NumPy int32 array of shape (N,). Misses are encoded as -1.
+)pbdoc")
+      .def(
+          "raycast",
+          [](const svo::Octree& octree, py::array origins, py::array directions, bool return_payload_indices) {
+            const PythonRayBatch rays = rays_from_numpy(origins, directions);
+            svo::RaycastOptions options;
+            options.return_payload_indices = return_payload_indices;
+            svo::RayBatch ray_batch;
+            ray_batch.origins = rays.origins;
+            ray_batch.directions = rays.directions;
+            ray_batch.width = rays.width;
+            ray_batch.height = rays.height;
+            return raycast_batch_to_numpy(
+                svo::raycast_cpu(octree, ray_batch, options), rays.image_shaped);
+          },
+          py::arg("origins"),
+          py::arg("directions"),
+          py::arg("return_payload_indices") = false,
+          R"pbdoc(
+Raycast origin/direction batches against the CPU octree.
+
+Args:
+    origins: NumPy array with shape (N, 3) or (H, W, 3), dtype float32 or float64.
+    directions: NumPy array with the same shape as origins.
+    return_payload_indices: Return payload indices instead of leaf IDs.
+
+Returns:
+    Tuple (hit_mask, leaf_ids, t, positions, depths). Misses use leaf_id=-1,
+    depth=-1, t=inf, and position=(nan, nan, nan).
 )pbdoc")
       .def(
           "to",

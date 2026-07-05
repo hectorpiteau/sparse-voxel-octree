@@ -355,33 +355,33 @@ Goal: implement a simple correct CPU raycast through the octree.
 
 ### Tasks
 
-- [ ] Implement ray/AABB intersection.
-- [ ] Implement dense-grid reference raycast for tests.
-- [ ] Implement CPU octree raycast.
-- [ ] Return hit/miss.
-- [ ] Return hit leaf ID.
-- [ ] Return hit distance `t`.
-- [ ] Return hit position.
-- [ ] Return hit voxel scale/depth.
-- [ ] Add Python binding.
+- [x] Implement ray/AABB intersection.
+- [x] Implement dense-grid reference raycast for tests.
+- [x] Implement CPU octree raycast.
+- [x] Return hit/miss.
+- [x] Return hit leaf ID.
+- [x] Return hit distance `t`.
+- [x] Return hit position.
+- [x] Return hit voxel scale/depth.
+- [x] Add Python binding.
 
 ### Tests
 
-- [ ] Empty tree miss.
-- [ ] Single voxel hit.
-- [ ] Single voxel miss.
-- [ ] Cube hit.
-- [ ] Ray starts inside root.
-- [ ] Ray starts inside occupied voxel.
-- [ ] Axis-aligned rays.
-- [ ] Diagonal rays.
-- [ ] Boundary rays.
-- [ ] Compare against dense-grid reference.
+- [x] Empty tree miss.
+- [x] Single voxel hit.
+- [x] Single voxel miss.
+- [x] Cube hit.
+- [x] Ray starts inside root.
+- [x] Ray starts inside occupied voxel.
+- [x] Axis-aligned rays.
+- [x] Diagonal rays.
+- [x] Boundary rays.
+- [x] Compare against dense-grid reference.
 
 ### Acceptance criteria
 
-- [ ] CPU raycast is correct for small trees.
-- [ ] Raycast behavior is documented.
+- [x] CPU raycast is correct for small trees.
+- [x] Raycast behavior is documented.
 
 ---
 
