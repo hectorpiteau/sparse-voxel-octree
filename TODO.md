@@ -394,7 +394,7 @@ Goal: implement GPU ray traversal.
 - [x] Implement CUDA raycast kernel.
 - [x] Use simple stack-based traversal first.
 - [x] Add C++ launcher.
-- [ ] Add Python binding.
+- [x] Add Python binding.
 - [x] Add output device buffers:
   - [x] hit mask
   - [x] leaf ID

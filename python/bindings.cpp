@@ -355,6 +355,52 @@ class CudaOctreeOwner {
     return vector_to_numpy(device_results.to_host());
   }
 
+  py::tuple raycast(py::array origins_array, py::array directions_array, bool return_payload_indices) const {
+    const PythonRayBatch rays = rays_from_numpy(origins_array, directions_array);
+    svo::DeviceBuffer<glm::vec3> device_origins =
+        svo::DeviceBuffer<glm::vec3>::from_host(rays.origins, svo::Device::CUDA);
+    svo::DeviceBuffer<glm::vec3> device_directions =
+        svo::DeviceBuffer<glm::vec3>::from_host(rays.directions, svo::Device::CUDA);
+    svo::DeviceBuffer<std::uint8_t> device_hit_mask(rays.origins.size(), svo::Device::CUDA);
+    svo::DeviceBuffer<std::int32_t> device_leaf_ids(rays.origins.size(), svo::Device::CUDA);
+    svo::DeviceBuffer<float> device_t(rays.origins.size(), svo::Device::CUDA);
+    svo::DeviceBuffer<glm::vec3> device_positions(rays.origins.size(), svo::Device::CUDA);
+    svo::DeviceBuffer<std::int32_t> device_depths(rays.origins.size(), svo::Device::CUDA);
+
+    svo::RaycastOptions options;
+    options.return_payload_indices = return_payload_indices;
+
+    {
+      py::gil_scoped_release release;
+      svo::raycast_cuda(
+          device_nodes_.data(),
+          device_nodes_.size(),
+          device_leaf_payload_indices_.data(),
+          device_leaf_payload_indices_.size(),
+          host_octree_.max_depth(),
+          host_octree_.root_bounds(),
+          device_origins.data(),
+          device_directions.data(),
+          device_hit_mask.data(),
+          device_leaf_ids.data(),
+          device_t.data(),
+          device_positions.data(),
+          device_depths.data(),
+          rays.origins.size(),
+          options);
+    }
+
+    svo::RaycastBatch results;
+    results.width = rays.width;
+    results.height = rays.height;
+    results.hit_mask = device_hit_mask.to_host();
+    results.leaf_ids = device_leaf_ids.to_host();
+    results.t = device_t.to_host();
+    results.positions = device_positions.to_host();
+    results.depths = device_depths.to_host();
+    return raycast_batch_to_numpy(results, rays.image_shaped);
+  }
+
  private:
   svo::Octree host_octree_;
   svo::DeviceBuffer<svo::NodeDescriptor> device_nodes_;
@@ -585,6 +631,30 @@ This convenience path copies CPU NumPy points to CUDA, runs the CUDA point-query
 launcher, and returns a CPU NumPy array. For repeated queries, use tree.to("cuda")
 to keep octree topology resident on the GPU.
 )pbdoc")
+      .def(
+          "raycast_cuda",
+          [](const svo::Octree& octree, py::array origins, py::array directions, bool return_payload_indices) {
+#if SVO_ENABLE_CUDA
+            return CudaOctreeOwner(octree).raycast(origins, directions, return_payload_indices);
+#else
+            (void)octree;
+            (void)origins;
+            (void)directions;
+            (void)return_payload_indices;
+            throw py::type_error(
+                "Octree.raycast_cuda requires a Python extension built with SVO_ENABLE_CUDA=ON");
+#endif
+          },
+          py::arg("origins"),
+          py::arg("directions"),
+          py::arg("return_payload_indices") = false,
+          R"pbdoc(
+Raycast through a temporary CUDA-owned octree.
+
+This convenience path copies CPU NumPy rays to CUDA, runs the CUDA raycast
+launcher, and returns CPU NumPy arrays matching Octree.raycast. For repeated
+raycasts, use tree.to("cuda") to keep octree topology resident on the GPU.
+)pbdoc")
       .def_property_readonly("max_depth", &svo::Octree::max_depth)
       .def_property_readonly("num_nodes", &svo::Octree::num_nodes)
       .def_property_readonly("num_leaves", &svo::Octree::num_leaves)
@@ -612,6 +682,23 @@ Args:
 
 Returns:
     NumPy int32 array of shape (N,). Misses are encoded as -1.
+)pbdoc")
+      .def(
+          "raycast",
+          &CudaOctreeOwner::raycast,
+          py::arg("origins"),
+          py::arg("directions"),
+          py::arg("return_payload_indices") = false,
+          R"pbdoc(
+Raycast against CUDA-resident octree topology.
+
+Args:
+    origins: CPU NumPy array with shape (N, 3) or (H, W, 3), dtype float32 or float64.
+    directions: CPU NumPy array with the same shape as origins.
+    return_payload_indices: Return payload indices instead of leaf IDs.
+
+Returns:
+    Tuple (hit_mask, leaf_ids, t, positions, depths), matching Octree.raycast.
 )pbdoc")
       .def(
           "to",
