@@ -1,6 +1,7 @@
 #include <svo/Camera.hpp>
 
 #include <cmath>
+#include <numbers>
 #include <string>
 
 #include <glm/geometric.hpp>
@@ -10,7 +11,6 @@
 namespace svo {
 namespace {
 
-constexpr float kPi = 3.14159265358979323846f;
 constexpr float kEpsilon = 1.0e-6f;
 
 bool is_finite(float value) noexcept {
@@ -43,7 +43,7 @@ CameraIntrinsics intrinsics_from_fov(int width, int height, float vertical_fov_y
     throw ValidationError("vertical_fov_y_degrees must be in the range (0, 180)");
   }
 
-  const float radians = vertical_fov_y_degrees * kPi / 180.0f;
+  const float radians = vertical_fov_y_degrees * std::numbers::pi_v<float> / 180.0f;
   const float focal = 0.5f * static_cast<float>(height) / std::tan(0.5f * radians);
   return CameraIntrinsics{
       width,

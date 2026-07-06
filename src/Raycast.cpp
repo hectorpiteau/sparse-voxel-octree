@@ -1,6 +1,7 @@
 #include <svo/Raycast.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -41,12 +42,7 @@ bool is_finite_vec3(const glm::vec3& value) noexcept {
 }
 
 int count_bits(std::uint8_t value) noexcept {
-  int count = 0;
-  while (value != 0u) {
-    count += static_cast<int>(value & 1u);
-    value = static_cast<std::uint8_t>(value >> 1u);
-  }
-  return count;
+  return std::popcount(value);
 }
 
 int prefix_rank(std::uint8_t mask, int child_index) noexcept {

@@ -496,16 +496,16 @@ Goal: modernize useful C++20 idioms after the standard migration without changin
 
 ### Notes
 
-- [ ] No deprecated C++17-era constructs were found in the current core scan (`std::auto_ptr`, `std::result_of`, old iterator adapters, raw owning `new/delete`, or `typedef`).
-- [ ] Keep changes pragmatic; do not refactor stable code just to use newer syntax.
-- [ ] Keep CUDA kernels conservative unless each C++20 feature is verified with `nvcc`.
+- [x] No deprecated C++17-era constructs were found in the current core scan (`std::auto_ptr`, `std::result_of`, old iterator adapters, raw owning `new/delete`, or `typedef`).
+- [x] Keep changes pragmatic; do not refactor stable code just to use newer syntax.
+- [x] Keep CUDA kernels conservative unless each C++20 feature is verified with `nvcc`.
 
 ### Candidate follow-ups
 
-- [ ] Replace CPU-side manual bit counting helpers with `std::popcount` from `<bit>` where it improves clarity.
-- [ ] Keep CUDA-side bit counting explicit or use CUDA intrinsics such as `__popc`; do not assume `std::popcount` is device-safe without testing.
+- [x] Replace CPU-side manual bit counting helpers with `std::popcount` from `<bit>` where it improves clarity.
+- [x] Keep CUDA-side bit counting explicit or use CUDA intrinsics such as `__popc`; do not assume `std::popcount` is device-safe without testing.
 - [ ] Consider `std::span` overloads for non-owning C++ batch inputs and buffer copy APIs to reduce `std::vector` coupling.
-- [ ] Replace local math constants such as camera pi with `std::numbers::pi_v<float>` where host-only.
+- [x] Replace local math constants such as camera pi with `std::numbers::pi_v<float>` where host-only.
 - [ ] Review sort/unique builder code for possible `std::ranges` use only if readability improves and compiler support remains clean.
 - [ ] Consolidate duplicated CUDA RAII test/benchmark helpers if it reduces maintenance without affecting public API.
 - [ ] Review repeated `static_cast` size/index conversions and add small checked conversion helpers only where they reduce real risk.
@@ -513,10 +513,10 @@ Goal: modernize useful C++20 idioms after the standard migration without changin
 
 ### Tests
 
-- [ ] CPU C++ tests pass after each modernization batch.
-- [ ] CUDA C++ tests pass for any touched CUDA-adjacent code.
-- [ ] Python tests pass if public APIs or bindings are touched.
-- [ ] Public header compile test remains clean under C++20.
+- [x] CPU C++ tests pass after each modernization batch.
+- [x] CUDA C++ tests pass for any touched CUDA-adjacent code.
+- [x] Python tests pass if public APIs or bindings are touched.
+- [x] Public header compile test remains clean under C++20.
 
 ### Acceptance criteria
 

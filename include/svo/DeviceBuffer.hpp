@@ -25,7 +25,7 @@ namespace svo {
 
 template <typename T>
 class DeviceBuffer {
-  static_assert(std::is_trivially_copyable<T>::value, "DeviceBuffer requires trivially copyable values");
+  static_assert(std::is_trivially_copyable_v<T>, "DeviceBuffer requires trivially copyable values");
 
  public:
   DeviceBuffer() = default;

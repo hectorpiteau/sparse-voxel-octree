@@ -1,5 +1,6 @@
 #include <svo/Octree.hpp>
 
+#include <bit>
 #include <cmath>
 #include <string>
 #include <utility>
@@ -10,12 +11,7 @@ namespace svo {
 namespace {
 
 int count_bits(std::uint8_t value) noexcept {
-  int count = 0;
-  while (value != 0u) {
-    count += static_cast<int>(value & 1u);
-    value = static_cast<std::uint8_t>(value >> 1u);
-  }
-  return count;
+  return std::popcount(value);
 }
 
 bool is_finite_vec3(const glm::vec3& value) noexcept {
