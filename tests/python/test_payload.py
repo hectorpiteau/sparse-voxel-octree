@@ -114,3 +114,13 @@ def test_gather_payload_torch_matches_manual_masked_indexing() -> None:
     assert gathered.dtype == payload.dtype
     assert tuple(gathered.shape) == (2, 2, 2)
     assert torch.equal(gathered, expected)
+
+
+def test_gather_payload_torch_cpu_validates_bad_indices_by_default() -> None:
+    torch = pytest.importorskip("torch")
+
+    payload = torch.tensor([10, 11, 12], dtype=torch.int32)
+    with pytest.raises(IndexError, match="inside the payload row range"):
+        svo.gather_payload(payload, torch.tensor([-2], dtype=torch.int32))
+    with pytest.raises(IndexError, match="inside the payload row range"):
+        svo.gather_payload(payload, torch.tensor([3], dtype=torch.int32))

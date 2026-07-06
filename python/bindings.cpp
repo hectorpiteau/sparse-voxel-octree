@@ -10,6 +10,10 @@
 #include <string>
 #include <vector>
 
+#if SVO_ENABLE_CUDA
+#include <cuda_runtime_api.h>
+#endif
+
 #include <svo/Camera.hpp>
 #include <svo/DeviceBuffer.hpp>
 #include <svo/Error.hpp>
@@ -18,8 +22,11 @@
 #include <svo/Raycast.hpp>
 
 namespace py = pybind11;
+using namespace pybind11::literals;
 
 namespace {
+
+static_assert(sizeof(glm::vec3) == 3 * sizeof(float), "Torch CUDA interop requires tightly packed glm::vec3");
 
 bool is_c_contiguous(const py::array& array) {
   return (array.flags() & py::array::c_style) == py::array::c_style;
@@ -367,10 +374,170 @@ py::tuple raycast_batch_to_numpy(const svo::RaycastBatch& results, bool image_sh
 
 
 #if SVO_ENABLE_CUDA
+void check_cuda(cudaError_t result, const char* operation) {
+  if (result != cudaSuccess) {
+    throw svo::Error(std::string(operation) + " failed: " + cudaGetErrorString(result));
+  }
+}
+
+int current_cuda_device() {
+  int device = 0;
+  check_cuda(cudaGetDevice(&device), "cudaGetDevice");
+  return device;
+}
+
+class CudaDeviceGuard {
+ public:
+  explicit CudaDeviceGuard(int device) : previous_device_(current_cuda_device()) {
+    if (previous_device_ != device) {
+      check_cuda(cudaSetDevice(device), "cudaSetDevice");
+      changed_ = true;
+    }
+  }
+
+  ~CudaDeviceGuard() {
+    if (changed_) {
+      (void)cudaSetDevice(previous_device_);
+    }
+  }
+
+  CudaDeviceGuard(const CudaDeviceGuard&) = delete;
+  CudaDeviceGuard& operator=(const CudaDeviceGuard&) = delete;
+
+ private:
+  int previous_device_ = 0;
+  bool changed_ = false;
+};
+
+bool object_type_is_from_torch(py::handle value) {
+  const py::object type = py::reinterpret_borrow<py::object>(reinterpret_cast<PyObject*>(Py_TYPE(value.ptr())));
+  const std::string module = py::cast<std::string>(type.attr("__module__"));
+  return module.rfind("torch", 0) == 0;
+}
+
+py::object import_torch() {
+  try {
+    return py::module_::import("torch");
+  } catch (const py::error_already_set& error) {
+    if (error.matches(PyExc_ModuleNotFoundError)) {
+      throw py::type_error("Torch tensor input requires torch to be installed");
+    }
+    throw;
+  }
+}
+
+bool py_equal(py::handle lhs, py::handle rhs) {
+  const int result = PyObject_RichCompareBool(lhs.ptr(), rhs.ptr(), Py_EQ);
+  if (result < 0) {
+    throw py::error_already_set();
+  }
+  return result == 1;
+}
+
+bool is_torch_tensor(py::handle torch, py::handle value) {
+  return py::cast<bool>(torch.attr("is_tensor")(value));
+}
+
+int torch_tensor_device_index(py::handle torch, py::handle tensor) {
+  if (!py::cast<bool>(tensor.attr("is_cuda"))) {
+    throw py::type_error("Torch tensor inputs to CudaOctree must be CUDA tensors");
+  }
+
+  py::object device = tensor.attr("device");
+  py::object index = device.attr("index");
+  if (index.is_none()) {
+    return py::cast<int>(torch.attr("cuda").attr("current_device")());
+  }
+  return py::cast<int>(index);
+}
+
+void check_torch_float32_tensor(
+    py::handle torch,
+    py::handle tensor,
+    const char* name,
+    int expected_device_index) {
+  if (!is_torch_tensor(torch, tensor)) {
+    throw py::type_error(std::string(name) + " must be a Torch tensor");
+  }
+  if (!py::cast<bool>(tensor.attr("is_cuda"))) {
+    throw py::type_error(std::string(name) + " must be a CUDA Torch tensor");
+  }
+  if (!py_equal(tensor.attr("dtype"), torch.attr("float32"))) {
+    throw py::type_error(std::string(name) + " must have dtype torch.float32");
+  }
+  if (!py::cast<bool>(tensor.attr("is_contiguous")())) {
+    throw py::value_error(std::string(name) + " must be contiguous");
+  }
+
+  const int tensor_device_index = torch_tensor_device_index(torch, tensor);
+  if (tensor_device_index != expected_device_index) {
+    std::ostringstream message;
+    message << name << " is on cuda:" << tensor_device_index
+            << " but this CudaOctree owns data on cuda:" << expected_device_index;
+    throw py::value_error(message.str());
+  }
+}
+
+std::vector<py::ssize_t> torch_shape(py::handle tensor) {
+  std::vector<py::ssize_t> shape;
+  py::tuple tuple = py::cast<py::tuple>(tensor.attr("shape"));
+  shape.reserve(static_cast<std::size_t>(tuple.size()));
+  for (py::handle value : tuple) {
+    shape.push_back(py::cast<py::ssize_t>(value));
+  }
+  return shape;
+}
+
+std::size_t checked_count_from_shape(py::ssize_t leading, const char* name) {
+  if (leading < 0) {
+    throw py::value_error(std::string(name) + " shape contains a negative dimension");
+  }
+  return static_cast<std::size_t>(leading);
+}
+
+std::size_t checked_flat_ray_count(const std::vector<py::ssize_t>& shape, const char* name) {
+  if (shape.size() == 2) {
+    return checked_count_from_shape(shape[0], name);
+  }
+  const std::size_t height = checked_count_from_shape(shape[0], name);
+  const std::size_t width = checked_count_from_shape(shape[1], name);
+  if (height != 0 && width > std::numeric_limits<std::size_t>::max() / height) {
+    throw py::value_error(std::string(name) + " shape is too large");
+  }
+  return height * width;
+}
+
+std::uintptr_t torch_data_ptr(py::handle tensor) {
+  return py::cast<std::uintptr_t>(tensor.attr("data_ptr")());
+}
+
+svo::CudaStreamHandle torch_current_stream(py::handle torch, py::handle tensor) {
+  py::object stream = torch.attr("cuda").attr("current_stream")(tensor.attr("device"));
+  const std::uintptr_t stream_pointer = py::cast<std::uintptr_t>(stream.attr("cuda_stream"));
+  return reinterpret_cast<svo::CudaStreamHandle>(stream_pointer);
+}
+
+py::object torch_empty_like_device(
+    py::handle torch,
+    const py::tuple& shape,
+    py::object dtype,
+    py::object device) {
+  return torch.attr("empty")(shape, "dtype"_a = dtype, "device"_a = device);
+}
+
+py::tuple tuple_from_shape(const std::vector<py::ssize_t>& shape) {
+  py::tuple tuple(shape.size());
+  for (std::size_t index = 0; index < shape.size(); ++index) {
+    tuple[index] = py::int_(shape[index]);
+  }
+  return tuple;
+}
+
 class CudaOctreeOwner {
  public:
   explicit CudaOctreeOwner(const svo::Octree& host_octree)
       : host_octree_(host_octree),
+        device_index_(current_cuda_device()),
         device_nodes_(svo::DeviceBuffer<svo::NodeDescriptor>::from_host(host_octree.nodes(), svo::Device::CUDA)),
         device_leaf_payload_indices_(svo::DeviceBuffer<std::uint32_t>::from_host(
             host_octree.leaf_payload_indices(),
@@ -380,10 +547,24 @@ class CudaOctreeOwner {
   int max_depth() const noexcept { return host_octree_.max_depth(); }
   std::int64_t num_nodes() const noexcept { return host_octree_.num_nodes(); }
   std::int64_t num_leaves() const noexcept { return host_octree_.num_leaves(); }
+  int device_index() const noexcept { return device_index_; }
   const svo::RootBounds& root_bounds() const noexcept { return host_octree_.root_bounds(); }
 
-  py::array_t<std::int32_t> query(py::array points_array, bool return_payload_indices) const {
+  py::object query(py::object points, bool return_payload_indices) const {
+    if (object_type_is_from_torch(points)) {
+      return query_torch(points, return_payload_indices);
+    }
+
+    py::array points_array = py::array::ensure(points);
+    if (!points_array) {
+      throw py::type_error("points must be a NumPy array or CUDA Torch tensor");
+    }
+    return query_numpy(points_array, return_payload_indices);
+  }
+
+  py::array_t<std::int32_t> query_numpy(py::array points_array, bool return_payload_indices) const {
     const std::vector<glm::vec3> points = points_from_numpy(points_array);
+    CudaDeviceGuard guard(device_index_);
     svo::DeviceBuffer<glm::vec3> device_points =
         svo::DeviceBuffer<glm::vec3>::from_host(points, svo::Device::CUDA);
     svo::DeviceBuffer<std::int32_t> device_results(points.size(), svo::Device::CUDA);
@@ -409,8 +590,64 @@ class CudaOctreeOwner {
     return vector_to_numpy(device_results.to_host());
   }
 
-  py::tuple raycast(py::array origins_array, py::array directions_array, bool return_payload_indices) const {
+  py::object query_torch(py::object points, bool return_payload_indices) const {
+    py::object torch = import_torch();
+    check_torch_float32_tensor(torch, points, "points", device_index_);
+
+    const std::vector<py::ssize_t> shape = torch_shape(points);
+    if (shape.size() != 2 || shape[1] != 3) {
+      throw py::value_error("points must have shape (N, 3)");
+    }
+
+    const std::size_t count = checked_count_from_shape(shape[0], "points");
+    py::object results = torch_empty_like_device(
+        torch,
+        py::make_tuple(shape[0]),
+        torch.attr("int32"),
+        points.attr("device"));
+    if (count == 0) {
+      return results;
+    }
+
+    svo::QueryOptions options;
+    options.return_payload_indices = return_payload_indices;
+    svo::CudaStreamHandle stream = torch_current_stream(torch, points);
+    CudaDeviceGuard guard(device_index_);
+    {
+      py::gil_scoped_release release;
+      svo::query_points_cuda(
+          device_nodes_.data(),
+          device_nodes_.size(),
+          device_leaf_payload_indices_.data(),
+          device_leaf_payload_indices_.size(),
+          host_octree_.max_depth(),
+          host_octree_.root_bounds(),
+          reinterpret_cast<const glm::vec3*>(torch_data_ptr(points)),
+          reinterpret_cast<std::int32_t*>(torch_data_ptr(results)),
+          count,
+          options,
+          stream);
+    }
+
+    return results;
+  }
+
+  py::object raycast(py::object origins, py::object directions, bool return_payload_indices) const {
+    if (object_type_is_from_torch(origins) || object_type_is_from_torch(directions)) {
+      return raycast_torch(origins, directions, return_payload_indices);
+    }
+
+    py::array origins_array = py::array::ensure(origins);
+    py::array directions_array = py::array::ensure(directions);
+    if (!origins_array || !directions_array) {
+      throw py::type_error("origins and directions must be NumPy arrays or CUDA Torch tensors");
+    }
+    return raycast_numpy(origins_array, directions_array, return_payload_indices);
+  }
+
+  py::tuple raycast_numpy(py::array origins_array, py::array directions_array, bool return_payload_indices) const {
     const PythonRayBatch rays = rays_from_numpy(origins_array, directions_array);
+    CudaDeviceGuard guard(device_index_);
     svo::DeviceBuffer<glm::vec3> device_origins =
         svo::DeviceBuffer<glm::vec3>::from_host(rays.origins, svo::Device::CUDA);
     svo::DeviceBuffer<glm::vec3> device_directions =
@@ -455,8 +692,70 @@ class CudaOctreeOwner {
     return raycast_batch_to_numpy(results, rays.image_shaped);
   }
 
+  py::object raycast_torch(py::object origins, py::object directions, bool return_payload_indices) const {
+    py::object torch = import_torch();
+    check_torch_float32_tensor(torch, origins, "origins", device_index_);
+    check_torch_float32_tensor(torch, directions, "directions", device_index_);
+
+    const std::vector<py::ssize_t> shape = torch_shape(origins);
+    const std::vector<py::ssize_t> direction_shape = torch_shape(directions);
+    if (shape != direction_shape) {
+      throw py::value_error("origins and directions must have the same shape");
+    }
+    const bool flat = shape.size() == 2 && shape[1] == 3;
+    const bool image = shape.size() == 3 && shape[2] == 3;
+    if (!flat && !image) {
+      throw py::value_error("origins and directions must have shape (N, 3) or (H, W, 3)");
+    }
+
+    const std::size_t count = checked_flat_ray_count(shape, "origins");
+    py::tuple output_shape;
+    if (flat) {
+      output_shape = py::make_tuple(shape[0]);
+    } else {
+      output_shape = py::make_tuple(shape[0], shape[1]);
+    }
+    py::object device = origins.attr("device");
+    py::object hit_mask = torch_empty_like_device(torch, output_shape, torch.attr("bool"), device);
+    py::object leaf_ids = torch_empty_like_device(torch, output_shape, torch.attr("int32"), device);
+    py::object t = torch_empty_like_device(torch, output_shape, torch.attr("float32"), device);
+    py::object positions = torch_empty_like_device(torch, tuple_from_shape(shape), torch.attr("float32"), device);
+    py::object depths = torch_empty_like_device(torch, output_shape, torch.attr("int32"), device);
+    if (count == 0) {
+      return py::make_tuple(hit_mask, leaf_ids, t, positions, depths);
+    }
+
+    svo::RaycastOptions options;
+    options.return_payload_indices = return_payload_indices;
+    svo::CudaStreamHandle stream = torch_current_stream(torch, origins);
+    CudaDeviceGuard guard(device_index_);
+    {
+      py::gil_scoped_release release;
+      svo::raycast_cuda(
+          device_nodes_.data(),
+          device_nodes_.size(),
+          device_leaf_payload_indices_.data(),
+          device_leaf_payload_indices_.size(),
+          host_octree_.max_depth(),
+          host_octree_.root_bounds(),
+          reinterpret_cast<const glm::vec3*>(torch_data_ptr(origins)),
+          reinterpret_cast<const glm::vec3*>(torch_data_ptr(directions)),
+          reinterpret_cast<std::uint8_t*>(torch_data_ptr(hit_mask)),
+          reinterpret_cast<std::int32_t*>(torch_data_ptr(leaf_ids)),
+          reinterpret_cast<float*>(torch_data_ptr(t)),
+          reinterpret_cast<glm::vec3*>(torch_data_ptr(positions)),
+          reinterpret_cast<std::int32_t*>(torch_data_ptr(depths)),
+          count,
+          options,
+          stream);
+    }
+
+    return py::make_tuple(hit_mask, leaf_ids, t, positions, depths);
+  }
+
  private:
   svo::Octree host_octree_;
+  int device_index_ = 0;
   svo::DeviceBuffer<svo::NodeDescriptor> device_nodes_;
   svo::DeviceBuffer<std::uint32_t> device_leaf_payload_indices_;
 };
@@ -464,7 +763,7 @@ class CudaOctreeOwner {
 std::string cuda_octree_repr(const CudaOctreeOwner& octree) {
   std::ostringstream stream;
   stream << "CudaOctree(max_depth=" << octree.max_depth() << ", num_nodes=" << octree.num_nodes()
-         << ", num_leaves=" << octree.num_leaves() << ", device='cuda')";
+         << ", num_leaves=" << octree.num_leaves() << ", device='cuda:" << octree.device_index() << "')";
   return stream.str();
 }
 #endif
@@ -694,7 +993,7 @@ is resident on the GPU. CPU-only builds raise a clear error for device="cuda".
 )pbdoc")
       .def(
           "query_cuda",
-          [](const svo::Octree& octree, py::array points, bool return_payload_indices) {
+          [](const svo::Octree& octree, py::object points, bool return_payload_indices) {
 #if SVO_ENABLE_CUDA
             return CudaOctreeOwner(octree).query(points, return_payload_indices);
 #else
@@ -710,13 +1009,14 @@ is resident on the GPU. CPU-only builds raise a clear error for device="cuda".
           R"pbdoc(
 Query points through a temporary CUDA-owned octree.
 
-This convenience path copies CPU NumPy points to CUDA, runs the CUDA point-query
-launcher, and returns a CPU NumPy array. For repeated queries, use tree.to("cuda")
-to keep octree topology resident on the GPU.
+This convenience path uploads octree topology for the call. CPU NumPy points are
+copied to CUDA and return a CPU NumPy array; CUDA Torch tensor points stay on
+GPU and return a CUDA torch.int32 tensor. For repeated queries, use
+tree.to("cuda") to keep octree topology resident on the GPU.
 )pbdoc")
       .def(
           "raycast_cuda",
-          [](const svo::Octree& octree, py::array origins, py::array directions, bool return_payload_indices) {
+          [](const svo::Octree& octree, py::object origins, py::object directions, bool return_payload_indices) {
 #if SVO_ENABLE_CUDA
             return CudaOctreeOwner(octree).raycast(origins, directions, return_payload_indices);
 #else
@@ -734,9 +1034,10 @@ to keep octree topology resident on the GPU.
           R"pbdoc(
 Raycast through a temporary CUDA-owned octree.
 
-This convenience path copies CPU NumPy rays to CUDA, runs the CUDA raycast
-launcher, and returns CPU NumPy arrays matching Octree.raycast. For repeated
-raycasts, use tree.to("cuda") to keep octree topology resident on the GPU.
+This convenience path uploads octree topology for the call. CPU NumPy rays are
+copied to CUDA and return CPU NumPy arrays; CUDA Torch tensor rays stay on GPU
+and return CUDA Torch tensors. For repeated raycasts, use tree.to("cuda") to
+keep octree topology resident on the GPU.
 )pbdoc")
       .def_property_readonly("max_depth", &svo::Octree::max_depth)
       .def_property_readonly("num_nodes", &svo::Octree::num_nodes)
@@ -763,15 +1064,17 @@ raycasts, use tree.to("cuda") to keep octree topology resident on the GPU.
 Query points against CUDA-resident octree topology.
 
 Args:
-    points: CPU NumPy array with shape (N, 3) and dtype float32 or float64.
+    points: CPU NumPy array with shape (N, 3), dtype float32 or float64,
+        or contiguous CUDA Torch tensor with shape (N, 3), dtype torch.float32.
     return_payload_indices: Return payload indices instead of leaf IDs.
 
 Returns:
-    NumPy int32 array of shape (N,). Misses are encoded as -1.
+    NumPy int32 array for NumPy input, or CUDA torch.int32 tensor for Torch
+    CUDA input. Misses are encoded as -1.
 )pbdoc")
       .def(
           "query_payload_indices",
-          [](const CudaOctreeOwner& octree, py::array points) {
+          [](const CudaOctreeOwner& octree, py::object points) {
             return octree.query(points, true);
           },
           py::arg("points"),
@@ -779,7 +1082,8 @@ Returns:
 Query points against CUDA-resident octree topology and return payload indices.
 
 Returns:
-    NumPy int32 array of shape (N,). Misses are encoded as -1.
+    NumPy int32 array for NumPy input, or CUDA torch.int32 tensor for Torch
+    CUDA input. Misses are encoded as -1.
 )pbdoc")
       .def(
           "raycast",
@@ -791,12 +1095,14 @@ Returns:
 Raycast against CUDA-resident octree topology.
 
 Args:
-    origins: CPU NumPy array with shape (N, 3) or (H, W, 3), dtype float32 or float64.
-    directions: CPU NumPy array with the same shape as origins.
+    origins: CPU NumPy array with shape (N, 3) or (H, W, 3), dtype float32 or float64,
+        or contiguous CUDA Torch tensor with the same shapes and dtype torch.float32.
+    directions: Same shape, dtype, device, and backend as origins.
     return_payload_indices: Return payload indices instead of leaf IDs.
 
 Returns:
-    Tuple (hit_mask, leaf_ids, t, positions, depths), matching Octree.raycast.
+    Tuple (hit_mask, leaf_ids, t, positions, depths), using NumPy arrays for
+    NumPy input or CUDA Torch tensors for Torch CUDA input.
 )pbdoc")
       .def(
           "to",
@@ -814,6 +1120,7 @@ Returns:
       .def_property_readonly("num_nodes", &CudaOctreeOwner::num_nodes)
       .def_property_readonly("num_leaves", &CudaOctreeOwner::num_leaves)
       .def_property_readonly("device", [](const CudaOctreeOwner&) { return std::string("cuda"); })
+      .def_property_readonly("device_index", &CudaOctreeOwner::device_index)
       .def_property_readonly(
           "root_bounds",
           [](const CudaOctreeOwner& octree) { return root_bounds_to_numpy(octree.root_bounds()); })

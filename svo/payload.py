@@ -43,7 +43,7 @@ def _is_torch_tensor(value: Any) -> bool:
     return torch.is_tensor(value)
 
 
-def _gather_torch(payload: Any, indices: Any, fill_value: Any) -> Any:
+def _gather_torch(payload: Any, indices: Any, fill_value: Any, validate_indices: bool | None) -> Any:
     import torch
 
     if not torch.is_tensor(indices):
@@ -55,36 +55,46 @@ def _gather_torch(payload: Any, indices: Any, fill_value: Any) -> Any:
     if indices.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64):
         raise TypeError("indices must have a signed integer dtype")
 
+    if validate_indices is None:
+        validate_indices = not indices.is_cuda
+
     output_shape = tuple(indices.shape) + tuple(payload.shape[1:])
     output = torch.empty(output_shape, dtype=payload.dtype, device=payload.device)
     output[...] = torch.as_tensor(fill_value, dtype=payload.dtype, device=payload.device)
 
     flat_indices = indices.reshape(-1)
-    flat_output = output.reshape((flat_indices.numel(),) + tuple(payload.shape[1:]))
     if flat_indices.numel() == 0:
         return output
 
-    invalid = (flat_indices < -1) | (flat_indices >= payload.shape[0])
-    if bool(torch.any(invalid).item()):
-        raise IndexError("indices must be -1 or inside the payload row range")
+    if validate_indices:
+        invalid = (flat_indices < -1) | (flat_indices >= payload.shape[0])
+        if bool(torch.any(invalid).item()):
+            raise IndexError("indices must be -1 or inside the payload row range")
 
-    valid = flat_indices != -1
-    if bool(torch.any(valid).item()):
-        flat_output[valid] = payload[flat_indices[valid].long()]
+    if payload.shape[0] == 0:
+        return output
+
+    flat_output = output.reshape((flat_indices.numel(),) + tuple(payload.shape[1:]))
+    miss_mask = flat_indices == -1
+    safe_indices = torch.where(miss_mask, torch.zeros_like(flat_indices), flat_indices)
+    safe_indices = safe_indices.clamp(0, payload.shape[0] - 1).long()
+    flat_output[...] = payload.index_select(0, safe_indices)
+    flat_output[miss_mask] = torch.as_tensor(fill_value, dtype=payload.dtype, device=payload.device)
 
     return output
 
 
-def gather_payload(payload: Any, indices: Any, fill_value: Any = 0) -> Any:
+def gather_payload(payload: Any, indices: Any, fill_value: Any = 0, validate_indices: bool | None = None) -> Any:
     """Gather external payload rows by query/raycast payload indices.
 
     Misses encoded as -1 are filled with ``fill_value`` instead of indexing the
-    final payload row. NumPy payloads accept NumPy-like integer indices. Torch
-    payloads require Torch integer indices on the same device.
+    final payload row. NumPy payloads always validate indices. Torch payloads
+    require Torch integer indices on the same device; CUDA Torch indices skip
+    validation by default to avoid host synchronization.
     """
 
     if isinstance(payload, np.ndarray):
         return _gather_numpy(payload, indices, fill_value)
     if _is_torch_tensor(payload):
-        return _gather_torch(payload, indices, fill_value)
+        return _gather_torch(payload, indices, fill_value, validate_indices)
     raise TypeError("payload must be a NumPy array or Torch tensor")
