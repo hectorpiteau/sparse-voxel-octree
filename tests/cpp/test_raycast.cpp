@@ -279,6 +279,17 @@ void test_axis_diagonal_boundary_and_payload() {
       1,
       "diagonal ray");
   require_miss(results, 2, "axis miss");
+
+  const svo::Octree remapped_octree = svo::Octree::from_voxels_cpu(
+      {{0, 0, 0}, {0, 1, 0}, {1, 1, 1}},
+      {10u, 11u, 12u},
+      options);
+  const svo::RaycastBatch remapped_results = svo::raycast_cpu(
+      remapped_octree,
+      {{-1.0f, 0.5f, 0.25f}},
+      {{1.0f, 0.0f, 0.0f}},
+      payload_options);
+  require_hit(remapped_results, 0, 10, 1.0f, {0.0f, 0.5f, 0.25f}, 1, "remapped payload hit");
 }
 
 void test_custom_root_bounds() {

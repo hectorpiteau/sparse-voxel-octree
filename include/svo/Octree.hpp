@@ -111,6 +111,11 @@ class Octree {
       const std::vector<glm::ivec3>& coordinates,
       const BuildOptions& options);
 
+  static Octree from_voxels_cpu(
+      const std::vector<glm::ivec3>& coordinates,
+      const std::vector<std::uint32_t>& payload_indices,
+      const BuildOptions& options);
+
   int max_depth() const noexcept { return max_depth_; }
   std::int64_t num_nodes() const noexcept { return static_cast<std::int64_t>(nodes_.size()); }
   std::int64_t num_leaves() const noexcept {

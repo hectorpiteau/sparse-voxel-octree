@@ -428,27 +428,27 @@ Goal: use the octree as an index into arbitrary payload tensors.
 
 ### Tasks
 
-- [ ] Define leaf ID vs payload index behavior.
-- [ ] Add `leaf_payload_indices`.
-- [ ] Add `query_payload_indices`.
-- [ ] Add gather helper for CPU arrays.
-- [ ] Add gather helper for Torch tensors.
-- [ ] Add shape rules.
-- [ ] Add dtype-agnostic support where possible.
+- [x] Define leaf ID vs payload index behavior.
+- [x] Add `leaf_payload_indices`.
+- [x] Add `query_payload_indices`.
+- [x] Add gather helper for CPU arrays.
+- [x] Add gather helper for Torch tensors.
+- [x] Add shape rules.
+- [x] Add dtype-agnostic support where possible.
 
 ### Tests
 
-- [ ] One int per voxel.
-- [ ] RGB float per voxel.
-- [ ] Feature vector per voxel.
-- [ ] Miss handling.
-- [ ] Payload index remapping.
-- [ ] Torch gather agrees with manual indexing.
+- [x] One int per voxel.
+- [x] RGB float per voxel.
+- [x] Feature vector per voxel.
+- [x] Miss handling.
+- [x] Payload index remapping.
+- [x] Torch gather agrees with manual indexing.
 
 ### Acceptance criteria
 
-- [ ] Users can store arbitrary payload outside the octree.
-- [ ] Query outputs can index payload tensors directly.
+- [x] Users can store arbitrary payload outside the octree.
+- [x] Query outputs can index payload tensors directly.
 
 ---
 

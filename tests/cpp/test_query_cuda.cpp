@@ -184,6 +184,22 @@ void test_small_deterministic_tree() {
   svo::QueryOptions payload_options;
   payload_options.return_payload_indices = true;
   require_cuda_matches_cpu(octree, points, payload_options, "CUDA payload query should match CPU");
+
+  const svo::Octree remapped_octree = svo::Octree::from_voxels_cpu(
+      {glm::ivec3{3, 3, 3}, glm::ivec3{0, 0, 0}, glm::ivec3{2, 1, 0}},
+      {42u, 7u, 99u},
+      build_options);
+  const std::vector<glm::vec3> remapped_points{
+      voxel_center_point(8, {0, 0, 0}),
+      voxel_center_point(8, {2, 1, 0}),
+      voxel_center_point(8, {3, 3, 3}),
+      voxel_center_point(8, {1, 1, 1}),
+  };
+  require_cuda_matches_cpu(
+      remapped_octree,
+      remapped_points,
+      payload_options,
+      "CUDA custom payload query should match CPU");
 #endif
 }
 

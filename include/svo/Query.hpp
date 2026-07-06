@@ -13,6 +13,10 @@ std::vector<std::int32_t> query_points(
     const std::vector<glm::vec3>& points,
     const QueryOptions& options = {});
 
+std::vector<std::int32_t> query_payload_indices(
+    const Octree& octree,
+    const std::vector<glm::vec3>& points);
+
 #if SVO_ENABLE_CUDA
 void query_points_cuda(
     const NodeDescriptor* nodes,

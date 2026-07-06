@@ -117,4 +117,12 @@ std::vector<std::int32_t> query_points(
   return results;
 }
 
+std::vector<std::int32_t> query_payload_indices(
+    const Octree& octree,
+    const std::vector<glm::vec3>& points) {
+  QueryOptions options;
+  options.return_payload_indices = true;
+  return query_points(octree, points, options);
+}
+
 }  // namespace svo

@@ -4,6 +4,7 @@
 
 #include <glm/ext/vector_int3.hpp>
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -120,6 +121,64 @@ int main() {
         octree.nodes().front().child_mask() == 0b00000001u &&
             octree.nodes().front().leaf_mask() == 0b00000001u,
         "max_depth=0 uses the reserved root-leaf descriptor convention");
+  }
+
+  {
+    svo::BuildOptions options;
+    options.max_depth = 2;
+
+    const std::vector<glm::ivec3> coordinates{
+        glm::ivec3{3, 3, 3},
+        glm::ivec3{0, 0, 0},
+        glm::ivec3{2, 1, 0},
+    };
+    const std::vector<std::uint32_t> payload_indices{42u, 7u, 99u};
+    const svo::Octree octree = svo::Octree::from_voxels_cpu(coordinates, payload_indices, options);
+
+    require(octree.num_leaves() == 3, "custom payload tree should keep three leaves");
+    require(
+        octree.leaf_payload_indices() == std::vector<std::uint32_t>{7u, 99u, 42u},
+        "custom payload indices should follow deterministic leaf order");
+  }
+
+  {
+    svo::BuildOptions options;
+    options.max_depth = 2;
+
+    const svo::Octree octree = svo::Octree::from_voxels_cpu(
+        {glm::ivec3{1, 1, 1}, glm::ivec3{1, 1, 1}},
+        {5u, 5u},
+        options);
+    require(octree.num_leaves() == 1, "matching duplicate payload indices should deduplicate");
+    require(
+        octree.leaf_payload_indices() == std::vector<std::uint32_t>{5u},
+        "deduplicated custom payload index should be preserved");
+
+    try {
+      (void)svo::Octree::from_voxels_cpu(
+          {glm::ivec3{1, 1, 1}, glm::ivec3{1, 1, 1}},
+          {5u, 6u},
+          options);
+      std::cerr << "expected conflicting duplicate payload indices to fail\n";
+      return 1;
+    } catch (const svo::ValidationError& error) {
+      require(
+          std::string(error.what()).find("matching payload indices") != std::string::npos,
+          "unexpected duplicate payload validation error");
+    }
+
+    try {
+      (void)svo::Octree::from_voxels_cpu(
+          {glm::ivec3{0, 0, 0}},
+          {1u, 2u},
+          options);
+      std::cerr << "expected payload index length mismatch to fail\n";
+      return 1;
+    } catch (const svo::ValidationError& error) {
+      require(
+          std::string(error.what()).find("same length") != std::string::npos,
+          "unexpected payload length validation error");
+    }
   }
 
   {

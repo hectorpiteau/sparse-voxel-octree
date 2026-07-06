@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -79,6 +80,50 @@ std::vector<glm::ivec3> coordinates_from_numpy(const py::array& array) {
   return coordinates;
 }
 
+std::vector<std::uint32_t> payload_indices_from_numpy(const py::array& array, py::ssize_t expected_count) {
+  if (array.ndim() != 1) {
+    throw py::value_error("payload_indices must have shape (N,)");
+  }
+  if (array.shape(0) != expected_count) {
+    throw py::value_error("payload_indices must have the same length as coords");
+  }
+  if (!(py::isinstance<py::array_t<std::int32_t>>(array) || py::isinstance<py::array_t<std::int64_t>>(array))) {
+    throw py::type_error("payload_indices must have dtype int32 or int64");
+  }
+  if (!is_c_contiguous(array)) {
+    throw py::value_error("payload_indices must be C-contiguous");
+  }
+
+  std::vector<std::uint32_t> payload_indices;
+  payload_indices.reserve(static_cast<std::size_t>(array.shape(0)));
+
+  if (py::isinstance<py::array_t<std::int32_t>>(array)) {
+    py::array_t<std::int32_t, py::array::c_style> cast(array);
+    auto view = cast.unchecked<1>();
+    for (py::ssize_t index = 0; index < view.shape(0); ++index) {
+      if (view(index) < 0) {
+        throw py::value_error("payload_indices must be non-negative");
+      }
+      payload_indices.push_back(static_cast<std::uint32_t>(view(index)));
+    }
+  } else {
+    py::array_t<std::int64_t, py::array::c_style> cast(array);
+    auto view = cast.unchecked<1>();
+    constexpr std::int64_t max_index = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
+    for (py::ssize_t index = 0; index < view.shape(0); ++index) {
+      if (view(index) < 0) {
+        throw py::value_error("payload_indices must be non-negative");
+      }
+      if (view(index) > max_index) {
+        throw py::value_error("payload_indices must be representable as int32");
+      }
+      payload_indices.push_back(static_cast<std::uint32_t>(view(index)));
+    }
+  }
+
+  return payload_indices;
+}
+
 std::vector<glm::vec3> points_from_numpy(const py::array& array) {
   if (array.ndim() != 2 || array.shape(1) != 3) {
     throw py::value_error("points must have shape (N, 3)");
@@ -118,6 +163,15 @@ py::array_t<std::int32_t> vector_to_numpy(const std::vector<std::int32_t>& value
   auto view = output.mutable_unchecked<1>();
   for (py::ssize_t index = 0; index < view.shape(0); ++index) {
     view(index) = values[static_cast<std::size_t>(index)];
+  }
+  return output;
+}
+
+py::array_t<std::int32_t> payload_indices_to_numpy(const std::vector<std::uint32_t>& values) {
+  py::array_t<std::int32_t> output(values.size());
+  auto view = output.mutable_unchecked<1>();
+  for (py::ssize_t index = 0; index < view.shape(0); ++index) {
+    view(index) = static_cast<std::int32_t>(values[static_cast<std::size_t>(index)]);
   }
   return output;
 }
@@ -510,7 +564,7 @@ PYBIND11_MODULE(_svo, module) {
   py::class_<svo::Octree>(module, "Octree", "Sparse voxel octree CPU wrapper.")
       .def_static(
           "from_voxels",
-          [](py::array coords, int max_depth, const std::string& device, py::object root_bounds) {
+          [](py::array coords, int max_depth, const std::string& device, py::object root_bounds, py::object payload_indices) {
             if (device != "cpu") {
               throw py::value_error(
                   "Octree.from_voxels currently supports only device='cpu'; build on CPU and use "
@@ -522,12 +576,25 @@ PYBIND11_MODULE(_svo, module) {
             options.device = svo::Device::CPU;
             options.root_bounds = root_bounds_from_python(root_bounds);
 
-            return svo::Octree::from_voxels_cpu(coordinates_from_numpy(coords), options);
+            const std::vector<glm::ivec3> coordinates = coordinates_from_numpy(coords);
+            if (payload_indices.is_none()) {
+              return svo::Octree::from_voxels_cpu(coordinates, options);
+            }
+
+            py::array payload_array = py::array::ensure(payload_indices);
+            if (!payload_array) {
+              throw py::type_error("payload_indices must be convertible to a NumPy array");
+            }
+            return svo::Octree::from_voxels_cpu(
+                coordinates,
+                payload_indices_from_numpy(payload_array, coords.shape(0)),
+                options);
           },
           py::arg("coords"),
           py::arg("max_depth"),
           py::arg("device") = "cpu",
           py::arg("root_bounds") = py::none(),
+          py::arg("payload_indices") = py::none(),
           R"pbdoc(
 Build a CPU octree from occupied voxel coordinates.
 
@@ -536,6 +603,7 @@ Args:
     max_depth: Octree depth. Valid voxel coordinates lie in [0, 2^max_depth).
     device: Currently only "cpu" is supported.
     root_bounds: Optional array with shape (2, 3). Defaults to [0, 1]^3.
+    payload_indices: Optional int array with shape (N,) mapping each input voxel to an external payload row.
 )pbdoc")
       .def(
           "query",
@@ -553,6 +621,21 @@ Query points against the CPU octree.
 Args:
     points: NumPy array with shape (N, 3) and dtype float32 or float64.
     return_payload_indices: Return payload indices instead of leaf IDs.
+
+Returns:
+    NumPy int32 array of shape (N,). Misses are encoded as -1.
+)pbdoc")
+      .def(
+          "query_payload_indices",
+          [](const svo::Octree& octree, py::array points) {
+            return vector_to_numpy(svo::query_payload_indices(octree, points_from_numpy(points)));
+          },
+          py::arg("points"),
+          R"pbdoc(
+Query points and return payload indices directly.
+
+Args:
+    points: NumPy array with shape (N, 3) and dtype float32 or float64.
 
 Returns:
     NumPy int32 array of shape (N,). Misses are encoded as -1.
@@ -664,6 +747,9 @@ raycasts, use tree.to("cuda") to keep octree topology resident on the GPU.
       .def_property_readonly(
           "root_bounds",
           [](const svo::Octree& octree) { return root_bounds_to_numpy(octree.root_bounds()); })
+      .def_property_readonly(
+          "leaf_payload_indices",
+          [](const svo::Octree& octree) { return payload_indices_to_numpy(octree.leaf_payload_indices()); })
       .def("__repr__", &octree_repr);
 
 #if SVO_ENABLE_CUDA
@@ -679,6 +765,18 @@ Query points against CUDA-resident octree topology.
 Args:
     points: CPU NumPy array with shape (N, 3) and dtype float32 or float64.
     return_payload_indices: Return payload indices instead of leaf IDs.
+
+Returns:
+    NumPy int32 array of shape (N,). Misses are encoded as -1.
+)pbdoc")
+      .def(
+          "query_payload_indices",
+          [](const CudaOctreeOwner& octree, py::array points) {
+            return octree.query(points, true);
+          },
+          py::arg("points"),
+          R"pbdoc(
+Query points against CUDA-resident octree topology and return payload indices.
 
 Returns:
     NumPy int32 array of shape (N,). Misses are encoded as -1.
@@ -719,6 +817,9 @@ Returns:
       .def_property_readonly(
           "root_bounds",
           [](const CudaOctreeOwner& octree) { return root_bounds_to_numpy(octree.root_bounds()); })
+      .def_property_readonly(
+          "leaf_payload_indices",
+          [](const CudaOctreeOwner& octree) { return payload_indices_to_numpy(octree.host_octree().leaf_payload_indices()); })
       .def("__repr__", &cuda_octree_repr);
 #endif
 

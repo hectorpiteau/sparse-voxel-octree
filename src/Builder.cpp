@@ -6,6 +6,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <svo/Error.hpp>
@@ -15,6 +16,11 @@ namespace {
 
 constexpr std::uint32_t kDescriptorFieldLimit =
     static_cast<std::uint32_t>((1u << NodeDescriptor::kChildBaseBits) - 1u);
+
+struct BuildVoxel {
+  glm::ivec3 coordinate{};
+  std::uint32_t payload_index = 0u;
+};
 
 bool lexicographic_less(const glm::ivec3& lhs, const glm::ivec3& rhs) noexcept {
   if (lhs.x != rhs.x) {
@@ -28,6 +34,14 @@ bool lexicographic_less(const glm::ivec3& lhs, const glm::ivec3& rhs) noexcept {
 
 bool lexicographic_equal(const glm::ivec3& lhs, const glm::ivec3& rhs) noexcept {
   return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+}
+
+bool build_voxel_less(const BuildVoxel& lhs, const BuildVoxel& rhs) noexcept {
+  return lexicographic_less(lhs.coordinate, rhs.coordinate);
+}
+
+bool build_voxel_same_coordinate(const BuildVoxel& lhs, const BuildVoxel& rhs) noexcept {
+  return lexicographic_equal(lhs.coordinate, rhs.coordinate);
 }
 
 int child_index_for_depth(const glm::ivec3& coordinate, int child_depth) noexcept {
@@ -45,11 +59,12 @@ void check_descriptor_capacity(std::size_t value, const char* field_name) {
 
 void emit_node_at(
     std::size_t node_index,
-    const std::vector<glm::ivec3>& coordinates,
+    const std::vector<BuildVoxel>& voxels,
     int depth_remaining,
+    bool use_custom_payload_indices,
     std::vector<NodeDescriptor>& nodes,
     std::vector<std::uint32_t>& leaf_payload_indices) {
-  std::array<std::vector<glm::ivec3>, 8> buckets;
+  std::array<std::vector<BuildVoxel>, 8> buckets;
   std::uint8_t child_mask = 0u;
   std::uint8_t leaf_mask = 0u;
 
@@ -57,9 +72,9 @@ void emit_node_at(
     throw ValidationError("builder encountered a non-positive depth while emitting a node");
   }
 
-  for (const glm::ivec3& coordinate : coordinates) {
-    const int child_index = child_index_for_depth(coordinate, depth_remaining - 1);
-    buckets[static_cast<std::size_t>(child_index)].push_back(coordinate);
+  for (const BuildVoxel& voxel : voxels) {
+    const int child_index = child_index_for_depth(voxel.coordinate, depth_remaining - 1);
+    buckets[static_cast<std::size_t>(child_index)].push_back(voxel);
   }
 
   if (depth_remaining == 1) {
@@ -75,7 +90,10 @@ void emit_node_at(
       leaf_mask = static_cast<std::uint8_t>(leaf_mask | (1u << child_index));
 
       check_descriptor_capacity(leaf_payload_indices.size(), "payload index");
-      leaf_payload_indices.push_back(static_cast<std::uint32_t>(leaf_payload_indices.size()));
+      const std::uint32_t payload_index = use_custom_payload_indices
+          ? buckets[child_index].front().payload_index
+          : static_cast<std::uint32_t>(leaf_payload_indices.size());
+      leaf_payload_indices.push_back(payload_index);
     }
 
     nodes[node_index] = NodeDescriptor::pack(child_mask, leaf_mask, 0u, static_cast<std::uint32_t>(payload_base));
@@ -108,11 +126,17 @@ void emit_node_at(
     }
 
     const std::size_t child_node_index = child_base + child_root_indices[child_index];
-    emit_node_at(child_node_index, buckets[child_index], depth_remaining - 1, nodes, leaf_payload_indices);
+    emit_node_at(
+        child_node_index,
+        buckets[child_index],
+        depth_remaining - 1,
+        use_custom_payload_indices,
+        nodes,
+        leaf_payload_indices);
   }
 }
 
-std::vector<glm::ivec3> validate_and_normalize_coordinates(
+void validate_build_options_and_coordinate_bounds(
     const std::vector<glm::ivec3>& coordinates,
     const BuildOptions& options) {
   if (options.max_depth < 0 || options.max_depth > 30) {
@@ -120,9 +144,8 @@ std::vector<glm::ivec3> validate_and_normalize_coordinates(
   }
 
   const std::int64_t upper_bound = static_cast<std::int64_t>(1) << options.max_depth;
-  std::vector<glm::ivec3> unique_coordinates = coordinates;
 
-  for (const glm::ivec3& coordinate : unique_coordinates) {
+  for (const glm::ivec3& coordinate : coordinates) {
     if (coordinate.x < 0 || coordinate.y < 0 || coordinate.z < 0) {
       throw ValidationError("voxel coordinates must be non-negative");
     }
@@ -131,22 +154,72 @@ std::vector<glm::ivec3> validate_and_normalize_coordinates(
       throw ValidationError("voxel coordinates must be inside [0, 2^max_depth)");
     }
   }
+}
 
+std::vector<BuildVoxel> validate_and_normalize_identity_voxels(
+    const std::vector<glm::ivec3>& coordinates,
+    const BuildOptions& options) {
+  validate_build_options_and_coordinate_bounds(coordinates, options);
+
+  std::vector<glm::ivec3> unique_coordinates = coordinates;
   std::sort(unique_coordinates.begin(), unique_coordinates.end(), lexicographic_less);
   unique_coordinates.erase(
       std::unique(unique_coordinates.begin(), unique_coordinates.end(), lexicographic_equal),
       unique_coordinates.end());
 
   check_descriptor_capacity(unique_coordinates.size(), "leaf count");
-  return unique_coordinates;
+
+  std::vector<BuildVoxel> voxels;
+  voxels.reserve(unique_coordinates.size());
+  for (const glm::ivec3& coordinate : unique_coordinates) {
+    voxels.push_back(BuildVoxel{coordinate, 0u});
+  }
+  return voxels;
 }
 
-}  // namespace
+std::vector<BuildVoxel> validate_and_normalize_payload_voxels(
+    const std::vector<glm::ivec3>& coordinates,
+    const std::vector<std::uint32_t>& payload_indices,
+    const BuildOptions& options) {
+  validate_build_options_and_coordinate_bounds(coordinates, options);
 
-Octree build_octree_cpu(const std::vector<glm::ivec3>& coordinates, const BuildOptions& options) {
-  std::vector<glm::ivec3> unique_coordinates = validate_and_normalize_coordinates(coordinates, options);
+  if (payload_indices.size() != coordinates.size()) {
+    throw ValidationError("payload_indices must have the same length as coordinates");
+  }
 
-  if (unique_coordinates.empty()) {
+  constexpr std::uint32_t kMaxReturnedIndex = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
+  std::vector<BuildVoxel> voxels;
+  voxels.reserve(coordinates.size());
+
+  for (std::size_t index = 0; index < coordinates.size(); ++index) {
+    if (payload_indices[index] > kMaxReturnedIndex) {
+      throw ValidationError("payload_indices must be representable as int32");
+    }
+    voxels.push_back(BuildVoxel{coordinates[index], payload_indices[index]});
+  }
+
+  std::sort(voxels.begin(), voxels.end(), build_voxel_less);
+
+  for (std::size_t index = 1; index < voxels.size(); ++index) {
+    if (build_voxel_same_coordinate(voxels[index - 1], voxels[index]) &&
+        voxels[index - 1].payload_index != voxels[index].payload_index) {
+      throw ValidationError("duplicate voxel coordinates must have matching payload indices");
+    }
+  }
+
+  voxels.erase(
+      std::unique(voxels.begin(), voxels.end(), build_voxel_same_coordinate),
+      voxels.end());
+
+  check_descriptor_capacity(voxels.size(), "leaf count");
+  return voxels;
+}
+
+Octree build_octree_from_voxels(
+    std::vector<BuildVoxel> voxels,
+    const BuildOptions& options,
+    bool use_custom_payload_indices) {
+  if (voxels.empty()) {
     Octree octree{options.max_depth, Device::CPU, options.root_bounds, {}, {}};
     octree.validate();
     return octree;
@@ -155,7 +228,8 @@ Octree build_octree_cpu(const std::vector<glm::ivec3>& coordinates, const BuildO
   if (options.max_depth == 0) {
     std::vector<NodeDescriptor> nodes{
         NodeDescriptor::pack(0b00000001u, 0b00000001u, 0u, 0u)};
-    std::vector<std::uint32_t> leaf_payload_indices{0u};
+    std::vector<std::uint32_t> leaf_payload_indices{
+        use_custom_payload_indices ? voxels.front().payload_index : 0u};
 
     Octree octree{
         options.max_depth,
@@ -169,9 +243,9 @@ Octree build_octree_cpu(const std::vector<glm::ivec3>& coordinates, const BuildO
 
   std::vector<NodeDescriptor> nodes(1);
   std::vector<std::uint32_t> leaf_payload_indices;
-  leaf_payload_indices.reserve(unique_coordinates.size());
+  leaf_payload_indices.reserve(voxels.size());
 
-  emit_node_at(0, unique_coordinates, options.max_depth, nodes, leaf_payload_indices);
+  emit_node_at(0, voxels, options.max_depth, use_custom_payload_indices, nodes, leaf_payload_indices);
 
   Octree octree{
       options.max_depth,
@@ -183,10 +257,36 @@ Octree build_octree_cpu(const std::vector<glm::ivec3>& coordinates, const BuildO
   return octree;
 }
 
+}  // namespace
+
+Octree build_octree_cpu(const std::vector<glm::ivec3>& coordinates, const BuildOptions& options) {
+  return build_octree_from_voxels(
+      validate_and_normalize_identity_voxels(coordinates, options),
+      options,
+      false);
+}
+
+Octree build_octree_cpu(
+    const std::vector<glm::ivec3>& coordinates,
+    const std::vector<std::uint32_t>& payload_indices,
+    const BuildOptions& options) {
+  return build_octree_from_voxels(
+      validate_and_normalize_payload_voxels(coordinates, payload_indices, options),
+      options,
+      true);
+}
+
 Octree Octree::from_voxels_cpu(
     const std::vector<glm::ivec3>& coordinates,
     const BuildOptions& options) {
   return build_octree_cpu(coordinates, options);
+}
+
+Octree Octree::from_voxels_cpu(
+    const std::vector<glm::ivec3>& coordinates,
+    const std::vector<std::uint32_t>& payload_indices,
+    const BuildOptions& options) {
+  return build_octree_cpu(coordinates, payload_indices, options);
 }
 
 }  // namespace svo

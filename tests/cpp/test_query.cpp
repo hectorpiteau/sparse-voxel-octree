@@ -86,6 +86,35 @@ void test_basic_cpu_query() {
   require(payload_indices.size() == 1 && payload_indices[0] == 2, "payload query should return payload index 2");
 }
 
+void test_custom_payload_index_query() {
+  svo::BuildOptions options;
+  options.max_depth = 2;
+
+  const std::vector<glm::ivec3> coordinates{
+      glm::ivec3{3, 3, 3},
+      glm::ivec3{0, 0, 0},
+      glm::ivec3{2, 1, 0},
+  };
+  const std::vector<std::uint32_t> payload_indices{42u, 7u, 99u};
+  const svo::Octree octree = svo::Octree::from_voxels_cpu(coordinates, payload_indices, options);
+
+  const std::vector<glm::vec3> points{
+      voxel_center_point(4, {0, 0, 0}),
+      voxel_center_point(4, {2, 1, 0}),
+      voxel_center_point(4, {3, 3, 3}),
+      voxel_center_point(4, {1, 1, 1}),
+  };
+
+  svo::QueryOptions payload_options;
+  payload_options.return_payload_indices = true;
+  const std::vector<std::int32_t> via_option = svo::query_points(octree, points, payload_options);
+  const std::vector<std::int32_t> via_helper = svo::query_payload_indices(octree, points);
+
+  require(via_option == std::vector<std::int32_t>{7, 99, 42, -1}, "custom payload query should remap hits");
+  require(via_helper == via_option, "query_payload_indices should match the explicit query option");
+  require(svo::query_points(octree, points) == std::vector<std::int32_t>{0, 1, 2, -1}, "leaf id query should stay unchanged");
+}
+
 void test_random_reference_query() {
   constexpr int max_depth = 5;
   constexpr int grid_size = 1 << max_depth;
@@ -198,6 +227,7 @@ void test_sphere_occupancy_query() {
 
 int main() {
   test_basic_cpu_query();
+  test_custom_payload_index_query();
   test_random_reference_query();
   test_sphere_occupancy_query();
   return 0;

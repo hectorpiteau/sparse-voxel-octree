@@ -251,6 +251,18 @@ void test_tiny_scenes_and_boundaries() {
   svo::RaycastOptions payload_options;
   payload_options.return_payload_indices = true;
   require_cuda_matches_cpu(octree, origins, directions, payload_options, "tiny scene payload");
+
+  const svo::Octree remapped_octree = svo::Octree::from_voxels_cpu(
+      {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 1}},
+      {10u, 11u, 12u, 13u},
+      options);
+  require_cuda_matches_cpu(
+      remapped_octree,
+      origins,
+      directions,
+      payload_options,
+      "tiny scene custom payload");
+
   const CudaRaycastResults stream_results = raycast_cuda_on_stream(octree, origins, directions);
   const svo::RaycastBatch cpu = svo::raycast_cpu(octree, origins, directions);
   require(stream_results.leaf_ids == cpu.leaf_ids, "explicit stream leaf ids should match CPU");
