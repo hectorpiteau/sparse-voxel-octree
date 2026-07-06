@@ -54,6 +54,16 @@ Which active cells should be sampled along this camera ray?
 
 The actual voxel payload should live in separate buffers or tensors.
 
+## Forward renderer example
+
+The forward renderer can render external density/color payloads indexed by the octree. This example builds a sparse sphere, colors it with smooth sinusoidal payloads, generates camera rays, and writes a PNG without extra visualization dependencies.
+
+```bash
+./.venv/bin/python examples/python/forward_render.py --output docs/assets/forward_render.png
+```
+
+![Forward render of a colored sparse sphere](docs/assets/forward_render.png)
+
 ## CPU raycast behavior
 
 `Octree.raycast(origins, directions)` accepts NumPy ray batches shaped `(N, 3)` or `(H, W, 3)` and returns `(hit_mask, leaf_ids, t, positions, depths)` with matching leading dimensions. Directions are normalized internally, so `t` is distance along the normalized ray direction and hit positions are `origin + t * normalized_direction`.

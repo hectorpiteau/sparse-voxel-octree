@@ -654,7 +654,7 @@ opacity = 1 - product_i(1 - alpha_i)
 
 - [x] Python can call `svo.render_volume(...)` and receive RGB/depth/opacity arrays or tensors.
 - [x] CPU reference and CUDA agree for small scenes.
-- [ ] Forward render example works.
+- [x] Forward render example works.
 
 ---
 
