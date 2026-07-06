@@ -17,6 +17,7 @@
 #include <svo/Camera.hpp>
 #include <svo/DeviceBuffer.hpp>
 #include <svo/Error.hpp>
+#include <svo/Interpolation.hpp>
 #include <svo/Octree.hpp>
 #include <svo/Query.hpp>
 #include <svo/Raycast.hpp>
@@ -163,6 +164,125 @@ std::vector<glm::vec3> points_from_numpy(const py::array& array) {
   }
 
   return points;
+}
+
+struct PythonPointBatch {
+  std::vector<glm::vec3> points;
+  std::vector<py::ssize_t> leading_shape;
+};
+
+PythonPointBatch point_batch_from_numpy(const py::array& array) {
+  if (array.ndim() < 2 || array.shape(array.ndim() - 1) != 3) {
+    throw py::value_error("points must have shape (..., 3)");
+  }
+  if (!(py::isinstance<py::array_t<float>>(array) || py::isinstance<py::array_t<double>>(array))) {
+    throw py::type_error("points must have dtype float32 or float64");
+  }
+  if (!is_c_contiguous(array)) {
+    throw py::value_error("points must be C-contiguous");
+  }
+
+  PythonPointBatch batch;
+  py::ssize_t count = 1;
+  for (py::ssize_t axis = 0; axis < array.ndim() - 1; ++axis) {
+    batch.leading_shape.push_back(array.shape(axis));
+    count *= array.shape(axis);
+  }
+  batch.points.reserve(static_cast<std::size_t>(count));
+
+  if (py::isinstance<py::array_t<float>>(array)) {
+    const auto* data = static_cast<const float*>(array.data());
+    for (py::ssize_t index = 0; index < count; ++index) {
+      batch.points.emplace_back(data[index * 3], data[index * 3 + 1], data[index * 3 + 2]);
+    }
+  } else {
+    const auto* data = static_cast<const double*>(array.data());
+    for (py::ssize_t index = 0; index < count; ++index) {
+      batch.points.emplace_back(
+          static_cast<float>(data[index * 3]),
+          static_cast<float>(data[index * 3 + 1]),
+          static_cast<float>(data[index * 3 + 2]));
+    }
+  }
+
+  return batch;
+}
+
+struct PythonPayloadView {
+  py::array array;
+  py::ssize_t rows = 0;
+  py::ssize_t channels = 1;
+  bool scalar = true;
+  bool double_precision = false;
+};
+
+PythonPayloadView payload_from_numpy(py::array array) {
+  if (array.ndim() != 1 && array.ndim() != 2) {
+    throw py::value_error("payload must have shape (P,) or (P, C)");
+  }
+  if (!(py::isinstance<py::array_t<float>>(array) || py::isinstance<py::array_t<double>>(array))) {
+    throw py::type_error("payload must have dtype float32 or float64");
+  }
+  if (!is_c_contiguous(array)) {
+    throw py::value_error("payload must be C-contiguous");
+  }
+
+  PythonPayloadView payload;
+  payload.array = array;
+  payload.rows = array.shape(0);
+  payload.scalar = array.ndim() == 1;
+  payload.channels = payload.scalar ? 1 : array.shape(1);
+  payload.double_precision = py::isinstance<py::array_t<double>>(array);
+  if (payload.channels <= 0) {
+    throw py::value_error("payload must have at least one channel");
+  }
+  return payload;
+}
+
+std::vector<py::ssize_t> interpolation_output_shape(
+    const std::vector<py::ssize_t>& leading_shape,
+    const PythonPayloadView& payload) {
+  std::vector<py::ssize_t> shape = leading_shape;
+  if (!payload.scalar) {
+    shape.push_back(payload.channels);
+  }
+  return shape;
+}
+
+py::object sample_trilinear_cpu_binding(
+    const svo::Octree& octree,
+    py::array points_array,
+    py::array payload_array,
+    double fill_value) {
+  const PythonPointBatch points = point_batch_from_numpy(points_array);
+  const PythonPayloadView payload = payload_from_numpy(payload_array);
+  const std::vector<py::ssize_t> output_shape = interpolation_output_shape(points.leading_shape, payload);
+
+  if (payload.double_precision) {
+    const auto* payload_data = static_cast<const double*>(payload.array.data());
+    const std::vector<double> values = svo::sample_trilinear_double(
+        octree,
+        points.points,
+        payload_data,
+        static_cast<std::size_t>(payload.rows),
+        static_cast<std::size_t>(payload.channels),
+        fill_value);
+    py::array_t<double> output(output_shape);
+    std::copy(values.begin(), values.end(), static_cast<double*>(output.mutable_data()));
+    return output;
+  }
+
+  const auto* payload_data = static_cast<const float*>(payload.array.data());
+  const std::vector<float> values = svo::sample_trilinear_float(
+      octree,
+      points.points,
+      payload_data,
+      static_cast<std::size_t>(payload.rows),
+      static_cast<std::size_t>(payload.channels),
+      static_cast<float>(fill_value));
+  py::array_t<float> output(output_shape);
+  std::copy(values.begin(), values.end(), static_cast<float*>(output.mutable_data()));
+  return output;
 }
 
 py::array_t<std::int32_t> vector_to_numpy(const std::vector<std::int32_t>& values) {
@@ -533,6 +653,108 @@ py::tuple tuple_from_shape(const std::vector<py::ssize_t>& shape) {
   return tuple;
 }
 
+std::size_t checked_torch_point_count(const std::vector<py::ssize_t>& shape, const char* name) {
+  if (shape.size() < 2 || shape.back() != 3) {
+    throw py::value_error(std::string(name) + " must have shape (..., 3)");
+  }
+  std::size_t count = 1;
+  for (std::size_t axis = 0; axis + 1 < shape.size(); ++axis) {
+    if (shape[axis] < 0) {
+      throw py::value_error(std::string(name) + " shape contains a negative dimension");
+    }
+    const std::size_t dim = static_cast<std::size_t>(shape[axis]);
+    if (dim != 0 && count > std::numeric_limits<std::size_t>::max() / dim) {
+      throw py::value_error(std::string(name) + " shape is too large");
+    }
+    count *= dim;
+  }
+  return count;
+}
+
+std::vector<py::ssize_t> torch_point_leading_shape(const std::vector<py::ssize_t>& shape) {
+  return std::vector<py::ssize_t>(shape.begin(), shape.end() - 1);
+}
+
+bool torch_dtype_is_float(py::handle torch, py::handle dtype) {
+  return py_equal(dtype, torch.attr("float32")) || py_equal(dtype, torch.attr("float64"));
+}
+
+void check_torch_floating_tensor(
+    py::handle torch,
+    py::handle tensor,
+    const char* name,
+    int expected_device_index) {
+  if (!is_torch_tensor(torch, tensor)) {
+    throw py::type_error(std::string(name) + " must be a Torch tensor");
+  }
+  if (!py::cast<bool>(tensor.attr("is_cuda"))) {
+    throw py::type_error(std::string(name) + " must be a CUDA Torch tensor");
+  }
+  if (!torch_dtype_is_float(torch, tensor.attr("dtype"))) {
+    throw py::type_error(std::string(name) + " must have dtype torch.float32 or torch.float64");
+  }
+  if (!py::cast<bool>(tensor.attr("is_contiguous")())) {
+    throw py::value_error(std::string(name) + " must be contiguous");
+  }
+
+  const int tensor_device_index = torch_tensor_device_index(torch, tensor);
+  if (tensor_device_index != expected_device_index) {
+    std::ostringstream message;
+    message << name << " is on cuda:" << tensor_device_index
+            << " but this CudaOctree owns data on cuda:" << expected_device_index;
+    throw py::value_error(message.str());
+  }
+}
+
+void check_torch_same_dtype(py::handle lhs, py::handle rhs, const char* name) {
+  if (!py_equal(lhs.attr("dtype"), rhs.attr("dtype"))) {
+    throw py::type_error(std::string(name) + " must have the same dtype as payload");
+  }
+}
+
+struct TorchPayloadShape {
+  py::ssize_t rows = 0;
+  py::ssize_t channels = 1;
+  bool scalar = true;
+  bool double_precision = false;
+};
+
+TorchPayloadShape torch_payload_shape(py::handle torch, py::handle payload) {
+  const std::vector<py::ssize_t> shape = torch_shape(payload);
+  if (shape.size() != 1 && shape.size() != 2) {
+    throw py::value_error("payload must have shape (P,) or (P, C)");
+  }
+  TorchPayloadShape payload_shape;
+  payload_shape.rows = shape[0];
+  payload_shape.scalar = shape.size() == 1;
+  payload_shape.channels = payload_shape.scalar ? 1 : shape[1];
+  payload_shape.double_precision = py_equal(payload.attr("dtype"), torch.attr("float64"));
+  if (payload_shape.rows < 0 || payload_shape.channels <= 0) {
+    throw py::value_error("payload must have shape (P,) or (P, C) with C > 0");
+  }
+  return payload_shape;
+}
+
+std::vector<py::ssize_t> torch_interpolation_output_shape(
+    const std::vector<py::ssize_t>& point_shape,
+    const TorchPayloadShape& payload_shape) {
+  std::vector<py::ssize_t> output_shape = torch_point_leading_shape(point_shape);
+  if (!payload_shape.scalar) {
+    output_shape.push_back(payload_shape.channels);
+  }
+  return output_shape;
+}
+
+void check_torch_shape_equals(
+    py::handle tensor,
+    const std::vector<py::ssize_t>& expected_shape,
+    const char* name) {
+  const std::vector<py::ssize_t> actual_shape = torch_shape(tensor);
+  if (actual_shape != expected_shape) {
+    throw py::value_error(std::string(name) + " has an unexpected shape");
+  }
+}
+
 class CudaOctreeOwner {
  public:
   explicit CudaOctreeOwner(const svo::Octree& host_octree)
@@ -762,7 +984,161 @@ class CudaOctreeOwner {
     return py::make_tuple(hit_mask, leaf_ids, t, positions, depths);
   }
 
+
+  py::object sample_trilinear_torch(py::object points, py::object payload, double fill_value) const {
+    py::object torch = import_torch();
+    check_torch_float32_tensor(torch, points, "points", device_index_);
+    check_torch_floating_tensor(torch, payload, "payload", device_index_);
+
+    const std::vector<py::ssize_t> point_shape = torch_shape(points);
+    const std::size_t count = checked_torch_point_count(point_shape, "points");
+    const TorchPayloadShape payload_shape = torch_payload_shape(torch, payload);
+    validate_payload_rows(static_cast<std::size_t>(payload_shape.rows));
+
+    const std::vector<py::ssize_t> output_shape = torch_interpolation_output_shape(point_shape, payload_shape);
+    py::object output = torch_empty_like_device(
+        torch,
+        tuple_from_shape(output_shape),
+        payload.attr("dtype"),
+        points.attr("device"));
+    if (count == 0) {
+      return output;
+    }
+
+    svo::CudaStreamHandle stream = torch_current_stream(torch, points);
+    const auto* point_data = reinterpret_cast<const glm::vec3*>(torch_data_ptr(points));
+    CudaDeviceGuard guard(device_index_);
+    if (payload_shape.double_precision) {
+      const auto* payload_data = reinterpret_cast<const double*>(torch_data_ptr(payload));
+      auto* output_data = reinterpret_cast<double*>(torch_data_ptr(output));
+      {
+        py::gil_scoped_release release;
+        svo::sample_trilinear_cuda_double(
+            device_nodes_.data(),
+            device_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            point_data,
+            payload_data,
+            output_data,
+            count,
+            static_cast<std::size_t>(payload_shape.rows),
+            static_cast<std::size_t>(payload_shape.channels),
+            fill_value,
+            stream);
+      }
+    } else {
+      const auto* payload_data = reinterpret_cast<const float*>(torch_data_ptr(payload));
+      auto* output_data = reinterpret_cast<float*>(torch_data_ptr(output));
+      {
+        py::gil_scoped_release release;
+        svo::sample_trilinear_cuda_float(
+            device_nodes_.data(),
+            device_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            point_data,
+            payload_data,
+            output_data,
+            count,
+            static_cast<std::size_t>(payload_shape.rows),
+            static_cast<std::size_t>(payload_shape.channels),
+            static_cast<float>(fill_value),
+            stream);
+      }
+    }
+
+    return output;
+  }
+
+  py::object sample_trilinear_backward_torch(
+      py::object points,
+      py::object payload,
+      py::object grad_outputs,
+      double fill_value) const {
+    py::object torch = import_torch();
+    check_torch_float32_tensor(torch, points, "points", device_index_);
+    check_torch_floating_tensor(torch, payload, "payload", device_index_);
+    check_torch_floating_tensor(torch, grad_outputs, "grad_outputs", device_index_);
+    check_torch_same_dtype(grad_outputs, payload, "grad_outputs");
+
+    const std::vector<py::ssize_t> point_shape = torch_shape(points);
+    const std::size_t count = checked_torch_point_count(point_shape, "points");
+    const TorchPayloadShape payload_shape = torch_payload_shape(torch, payload);
+    validate_payload_rows(static_cast<std::size_t>(payload_shape.rows));
+    check_torch_shape_equals(
+        grad_outputs,
+        torch_interpolation_output_shape(point_shape, payload_shape),
+        "grad_outputs");
+
+    py::object grad_payload = torch.attr("zeros_like")(payload);
+    if (count == 0) {
+      return grad_payload;
+    }
+
+    svo::CudaStreamHandle stream = torch_current_stream(torch, points);
+    const auto* point_data = reinterpret_cast<const glm::vec3*>(torch_data_ptr(points));
+    CudaDeviceGuard guard(device_index_);
+    if (payload_shape.double_precision) {
+      const auto* grad_output_data = reinterpret_cast<const double*>(torch_data_ptr(grad_outputs));
+      auto* grad_payload_data = reinterpret_cast<double*>(torch_data_ptr(grad_payload));
+      {
+        py::gil_scoped_release release;
+        svo::sample_trilinear_backward_cuda_double(
+            device_nodes_.data(),
+            device_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            point_data,
+            grad_output_data,
+            grad_payload_data,
+            count,
+            static_cast<std::size_t>(payload_shape.rows),
+            static_cast<std::size_t>(payload_shape.channels),
+            fill_value,
+            stream);
+      }
+    } else {
+      const auto* grad_output_data = reinterpret_cast<const float*>(torch_data_ptr(grad_outputs));
+      auto* grad_payload_data = reinterpret_cast<float*>(torch_data_ptr(grad_payload));
+      {
+        py::gil_scoped_release release;
+        svo::sample_trilinear_backward_cuda_float(
+            device_nodes_.data(),
+            device_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            point_data,
+            grad_output_data,
+            grad_payload_data,
+            count,
+            static_cast<std::size_t>(payload_shape.rows),
+            static_cast<std::size_t>(payload_shape.channels),
+            static_cast<float>(fill_value),
+            stream);
+      }
+    }
+
+    return grad_payload;
+  }
+
  private:
+  void validate_payload_rows(std::size_t payload_rows) const {
+    for (std::uint32_t payload_index : host_octree_.leaf_payload_indices()) {
+      if (payload_index >= payload_rows) {
+        throw py::value_error("leaf payload index is outside the payload row range");
+      }
+    }
+  }
+
   svo::Octree host_octree_;
   int device_index_ = 0;
   svo::DeviceBuffer<svo::NodeDescriptor> device_nodes_;
@@ -1114,6 +1490,19 @@ Returns:
     NumPy input or CUDA Torch tensors for Torch CUDA input.
 )pbdoc")
       .def(
+          "_sample_trilinear_torch",
+          &CudaOctreeOwner::sample_trilinear_torch,
+          py::arg("points"),
+          py::arg("payload"),
+          py::arg("fill_value") = 0.0)
+      .def(
+          "_sample_trilinear_backward_torch",
+          &CudaOctreeOwner::sample_trilinear_backward_torch,
+          py::arg("points"),
+          py::arg("payload"),
+          py::arg("grad_outputs"),
+          py::arg("fill_value") = 0.0)
+      .def(
           "to",
           [](const CudaOctreeOwner& octree, const std::string& device) -> py::object {
             if (device == "cuda") {
@@ -1138,6 +1527,19 @@ Returns:
           [](const CudaOctreeOwner& octree) { return payload_indices_to_numpy(octree.host_octree().leaf_payload_indices()); })
       .def("__repr__", &cuda_octree_repr);
 #endif
+
+  module.def(
+      "_sample_trilinear_cpu",
+      &sample_trilinear_cpu_binding,
+      py::arg("tree"),
+      py::arg("points"),
+      py::arg("payload"),
+      py::arg("fill_value") = 0.0,
+      R"pbdoc(
+Sample leaf-centered payload values with trilinear interpolation on CPU.
+
+This private binding is wrapped by ``svo.sample_trilinear``.
+)pbdoc");
 
   module.def(
       "cuda_enabled",

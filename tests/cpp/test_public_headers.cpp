@@ -2,6 +2,7 @@
 #include <svo/Camera.hpp>
 #include <svo/DeviceBuffer.hpp>
 #include <svo/Error.hpp>
+#include <svo/Interpolation.hpp>
 #include <svo/Math.hpp>
 #include <svo/Octree.hpp>
 #include <svo/Query.hpp>
@@ -39,6 +40,9 @@ int main() {
   svo::Octree octree{
       1, svo::Device::CPU, svo::default_root_bounds(), {descriptor}, {0u}};
   svo::RaycastBatch raycast_results = svo::raycast_cpu(octree, rays, raycast_options);
+  std::vector<float> payload{1.0f};
+  std::vector<float> interpolation_results =
+      svo::sample_trilinear_float(octree, points, payload.data(), payload.size(), 1);
 
   octree.validate();
 
@@ -52,6 +56,8 @@ int main() {
   (void)camera;
   (void)rays;
   (void)raycast_results;
+  (void)payload;
+  (void)interpolation_results;
   (void)buffer;
   (void)descriptor;
   (void)octree;

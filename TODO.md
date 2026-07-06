@@ -574,34 +574,36 @@ Goal: add differentiable sampling of sparse voxel payloads.
 
 ### Tasks
 
-- [ ] Decide cell-centered vs corner-valued vs brick-valued layout.
-- [ ] Implement CPU trilinear reference.
-- [ ] Implement CUDA trilinear interpolation.
-- [ ] Add forward API.
-- [ ] Add backward API for payload gradients.
-- [ ] Add Torch autograd wrapper.
-- [ ] Support feature dimension `C`.
+- [x] Decide cell-centered vs corner-valued vs brick-valued layout.
+- [x] Implement CPU trilinear reference.
+- [x] Implement CUDA trilinear interpolation.
+- [x] Add forward API.
+- [x] Add backward API for payload gradients.
+- [x] Add Torch autograd wrapper.
+- [x] Support feature dimension `C`.
 
-Recommended initial layout:
+Implemented layout:
 
 ```text
-brick_features: [num_bricks, B, B, B, C]
-leaf_id -> brick_id
+leaf_payload: [payload_rows] or [payload_rows, C]
+leaf_id -> payload_index
+samples blend the 8 neighboring max-depth leaf-center values
+missing neighbors use fill_value, default 0
 ```
 
 ### Tests
 
-- [ ] Constant field returns constant.
-- [ ] Linear field interpolates exactly.
-- [ ] CPU vs CUDA interpolation.
-- [ ] Torch `gradcheck` for payload values.
-- [ ] Miss behavior.
-- [ ] Boundary behavior.
+- [x] Constant field returns constant.
+- [x] Linear field interpolates exactly.
+- [x] CPU vs CUDA interpolation.
+- [x] Torch `gradcheck` for payload values.
+- [x] Miss behavior.
+- [x] Boundary behavior.
 
 ### Acceptance criteria
 
-- [ ] Interpolation is differentiable with respect to payload tensors.
-- [ ] Gradients match finite differences for stable cases.
+- [x] Interpolation is differentiable with respect to payload tensors.
+- [x] Gradients match finite differences for stable cases.
 
 ---
 
@@ -938,6 +940,17 @@ Goal: publish first differentiable rendering release.
 
 ---
 
+## Future features, not scheduled
+
+These are useful directions but are not assigned to a milestone yet. Do not treat them as required scope for the next implementation milestone unless explicitly promoted into the roadmap.
+
+- [ ] Add corner-valued trilinear interpolation for workloads where values live on sparse grid corners instead of leaf centers.
+- [ ] Add brick-based interpolation for per-leaf dense feature bricks, with explicit boundary stitching behavior.
+- [ ] Add hierarchical/coarse fallback interpolation for samples near sparse edges where one or more neighboring leaves are missing.
+- [ ] Compare interpolation layouts in documentation: leaf-centered, corner-valued, brick-based, and hierarchical fallback.
+
+---
+
 ## Open design decisions
 
 These should be resolved before or during implementation.
@@ -949,7 +962,7 @@ These should be resolved before or during implementation.
 - [ ] Initial CUDA version target.
 - [ ] Initial supported compute capabilities.
 - [ ] Whether CPU support is full or reference-only.
-- [ ] Leaf-centered, corner-centered, or brick-based interpolation.
+- [ ] Which additional interpolation layouts should be supported after the leaf-centered baseline.
 - [ ] Serialization format.
 - [ ] Whether to support dynamic updates in early versions.
 - [ ] Whether to support camera gradients in first renderer version.
