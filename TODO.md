@@ -452,6 +452,84 @@ Goal: use the octree as an index into arbitrary payload tensors.
 
 ---
 
+
+
+## Milestone 10.1 — C++20 migration
+
+Goal: move the C++/CUDA core from C++17 to C++20 before adding heavier Torch CUDA interop.
+
+### Tasks
+
+- [ ] Update CMake C++ standard from 17 to 20.
+- [ ] Update target compile features from `cxx_std_17` to `cxx_std_20`.
+- [ ] Update README and developer docs that mention C++17.
+- [ ] Document minimum supported compiler and CUDA expectations for C++20 builds.
+- [ ] Keep CUDA device code conservative; avoid C++20 standard library features in kernels unless verified with `nvcc`.
+- [ ] Verify CPU-only builds still work.
+- [ ] Verify CUDA builds still work.
+- [ ] Verify Python extension builds through `scikit-build-core`.
+- [ ] Check public headers still compile from an external target.
+
+### Tests
+
+- [ ] CPU CMake configure/build passes.
+- [ ] CPU C++ test suite passes.
+- [ ] CUDA CMake configure/build passes.
+- [ ] CUDA C++ test suite passes.
+- [ ] Python package editable install passes.
+- [ ] Python test suite passes.
+- [ ] Wheel/source build still succeeds if practical.
+
+### Acceptance criteria
+
+- [ ] The project consistently builds as C++20.
+- [ ] README no longer advertises C++17 as the target standard.
+- [ ] CPU, CUDA, and Python build/test paths still pass.
+- [ ] Any compiler/CUDA version assumptions are documented.
+
+---
+
+## Milestone 10.5 — Torch CUDA tensor interop
+
+Goal: let Python users keep query/raycast inputs, outputs, and payload gathering on CUDA tensors without implicit host roundtrips.
+
+### Tasks
+
+- [ ] Add optional Torch build/runtime integration without making Torch mandatory for CPU-only users.
+- [ ] Accept Torch CUDA point tensors for CUDA point query.
+- [ ] Accept Torch CUDA ray origin/direction tensors for CUDA raycast.
+- [ ] Return CUDA tensor outputs for CUDA query/raycast when inputs are CUDA tensors.
+- [ ] Support `torch.int32` payload/leaf ID outputs by default, with documented dtype behavior.
+- [ ] Make `svo.gather_payload` work on CUDA payload tensors and CUDA index tensors without device transfers.
+- [ ] Avoid CPU-GPU transfers on CUDA tensor hot paths; only explicit CPU-return APIs may copy results to host.
+- [ ] Reuse CUDA-resident topology and caller-provided CUDA tensors instead of staging through NumPy/CPU buffers.
+- [ ] Respect the current PyTorch CUDA stream or expose explicit stream behavior.
+- [ ] Avoid per-call topology transfers; require/use a CUDA-owned octree for hot paths.
+- [ ] Validate dtype, shape, contiguity, device, and lifetime before launching kernels.
+- [ ] Document synchronization behavior and avoid implicit host synchronization except for explicit CPU-return APIs.
+
+### Tests
+
+- [ ] CUDA Torch query returns CUDA tensors and matches CPU reference after explicit `.cpu()`.
+- [ ] CUDA Torch raycast returns CUDA tensors and matches CPU/CUDA NumPy reference after explicit `.cpu()`.
+- [ ] CUDA Torch payload gather matches manual masked indexing on CUDA tensors.
+- [ ] Miss handling fills `-1` entries without indexing the last payload row.
+- [ ] Mixed-device inputs fail clearly.
+- [ ] Non-contiguous tensors fail clearly or are explicitly copied only when requested.
+- [ ] Current-stream behavior is tested with a non-default stream.
+- [ ] Transfer behavior is checked: CUDA tensor query/raycast/gather paths do not perform implicit host copies.
+- [ ] No hidden host synchronization in hot paths, verified by code review and profiler/manual check.
+
+### Acceptance criteria
+
+- [ ] Users can run `cuda_tree.query(torch_points_cuda)` and receive CUDA tensor IDs.
+- [ ] Users can run `svo.gather_payload(torch_payload_cuda, ids_cuda)` entirely on GPU.
+- [ ] Query/raycast + gather can be chained into downstream Torch CUDA operations without CPU copies.
+- [ ] CPU-GPU transfers are avoided or reduced to documented explicit API boundaries.
+- [ ] CPU-only installs still import and run without Torch.
+
+---
+
 ## Milestone 11 — Trilinear interpolation
 
 Goal: add differentiable sampling of sparse voxel payloads.
