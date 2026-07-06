@@ -21,6 +21,7 @@
 #include <svo/Octree.hpp>
 #include <svo/Query.hpp>
 #include <svo/Raycast.hpp>
+#include <svo/Renderer.hpp>
 
 namespace py = pybind11;
 using namespace pybind11::literals;
@@ -437,6 +438,139 @@ PythonRayBatch rays_from_numpy(py::array origins, py::array directions) {
   rays.directions = ray_vectors_from_numpy(directions);
   return rays;
 }
+
+struct PythonRenderPayloadView {
+  py::array sigma;
+  py::array color;
+  py::ssize_t rows = 0;
+};
+
+PythonRenderPayloadView render_payload_from_numpy(py::array sigma, py::array color) {
+  if (sigma.ndim() != 1) {
+    throw py::value_error("sigma must have shape (P,)");
+  }
+  if (color.ndim() != 2 || color.shape(1) != 3) {
+    throw py::value_error("color must have shape (P, 3)");
+  }
+  if (!py::isinstance<py::array_t<float>>(sigma)) {
+    throw py::type_error("sigma must have dtype float32");
+  }
+  if (!py::isinstance<py::array_t<float>>(color)) {
+    throw py::type_error("color must have dtype float32");
+  }
+  if (!is_c_contiguous(sigma) || !is_c_contiguous(color)) {
+    throw py::value_error("sigma and color must be C-contiguous");
+  }
+  if (sigma.shape(0) != color.shape(0)) {
+    throw py::value_error("sigma and color must have the same row count");
+  }
+
+  PythonRenderPayloadView payload;
+  payload.sigma = sigma;
+  payload.color = color;
+  payload.rows = sigma.shape(0);
+  return payload;
+}
+
+svo::RenderOptions render_options_from_python(
+    double near_plane,
+    double far_plane,
+    py::object background_color,
+    double early_stop_transmittance,
+    bool store_aux,
+    bool enable_empty_space_skipping) {
+  svo::RenderOptions options;
+  options.near_plane = static_cast<float>(near_plane);
+  options.far_plane = static_cast<float>(far_plane);
+  options.background_color = vec3_from_python(background_color, "background_color");
+  options.early_stop_transmittance = static_cast<float>(early_stop_transmittance);
+  options.store_aux = store_aux;
+  options.enable_empty_space_skipping = enable_empty_space_skipping;
+  return options;
+}
+
+py::tuple render_batch_to_numpy(const svo::RenderBatch& results, bool image_shaped) {
+  if (image_shaped) {
+    py::array_t<float> rgb({results.height, results.width, 3});
+    py::array_t<float> depth({results.height, results.width});
+    py::array_t<float> opacity({results.height, results.width});
+    auto rgb_view = rgb.mutable_unchecked<3>();
+    auto depth_view = depth.mutable_unchecked<2>();
+    auto opacity_view = opacity.mutable_unchecked<2>();
+    for (int y = 0; y < results.height; ++y) {
+      for (int x = 0; x < results.width; ++x) {
+        const std::size_t index = static_cast<std::size_t>(y) * static_cast<std::size_t>(results.width) +
+            static_cast<std::size_t>(x);
+        for (int axis = 0; axis < 3; ++axis) {
+          rgb_view(y, x, axis) = results.rgb[index][axis];
+        }
+        depth_view(y, x) = results.depth[index];
+        opacity_view(y, x) = results.opacity[index];
+      }
+    }
+    return py::make_tuple(rgb, depth, opacity);
+  }
+
+  const py::ssize_t count = static_cast<py::ssize_t>(results.rgb.size());
+  py::array_t<float> rgb({count, static_cast<py::ssize_t>(3)});
+  py::array_t<float> depth(count);
+  py::array_t<float> opacity(count);
+  auto rgb_view = rgb.mutable_unchecked<2>();
+  auto depth_view = depth.mutable_unchecked<1>();
+  auto opacity_view = opacity.mutable_unchecked<1>();
+  for (py::ssize_t index = 0; index < count; ++index) {
+    const std::size_t result_index = static_cast<std::size_t>(index);
+    for (int axis = 0; axis < 3; ++axis) {
+      rgb_view(index, axis) = results.rgb[result_index][axis];
+    }
+    depth_view(index) = results.depth[result_index];
+    opacity_view(index) = results.opacity[result_index];
+  }
+  return py::make_tuple(rgb, depth, opacity);
+}
+
+py::tuple render_volume_cpu_binding(
+    const svo::Octree& octree,
+    py::array origins,
+    py::array directions,
+    py::array sigma,
+    py::array color,
+    double near_plane,
+    double far_plane,
+    py::object background_color,
+    double early_stop_transmittance,
+    bool store_aux,
+    bool enable_empty_space_skipping) {
+  if (!py::isinstance<py::array_t<float>>(origins) || !py::isinstance<py::array_t<float>>(directions)) {
+    throw py::type_error("origins and directions must have dtype float32 for rendering");
+  }
+  const PythonRayBatch rays = rays_from_numpy(origins, directions);
+  const PythonRenderPayloadView payload = render_payload_from_numpy(sigma, color);
+  svo::RayBatch ray_batch;
+  ray_batch.origins = rays.origins;
+  ray_batch.directions = rays.directions;
+  ray_batch.width = rays.width;
+  ray_batch.height = rays.height;
+  const svo::RenderOptions options = render_options_from_python(
+      near_plane,
+      far_plane,
+      background_color,
+      early_stop_transmittance,
+      store_aux,
+      enable_empty_space_skipping);
+  const auto* sigma_data = static_cast<const float*>(payload.sigma.data());
+  const auto* color_data = static_cast<const float*>(payload.color.data());
+  return render_batch_to_numpy(
+      svo::render_volume_cpu(
+          octree,
+          ray_batch,
+          sigma_data,
+          color_data,
+          static_cast<std::size_t>(payload.rows),
+          options),
+      rays.image_shaped);
+}
+
 
 py::tuple raycast_batch_to_numpy(const svo::RaycastBatch& results, bool image_shaped) {
   if (image_shaped) {
@@ -1130,6 +1264,100 @@ class CudaOctreeOwner {
     return grad_payload;
   }
 
+  py::object render_volume_torch(
+      py::object origins,
+      py::object directions,
+      py::object sigma,
+      py::object color,
+      double near_plane,
+      double far_plane,
+      py::object background_color,
+      double early_stop_transmittance,
+      bool store_aux,
+      bool enable_empty_space_skipping) const {
+    py::object torch = import_torch();
+    check_torch_float32_tensor(torch, origins, "origins", device_index_);
+    check_torch_float32_tensor(torch, directions, "directions", device_index_);
+    check_torch_float32_tensor(torch, sigma, "sigma", device_index_);
+    check_torch_float32_tensor(torch, color, "color", device_index_);
+
+    const std::vector<py::ssize_t> ray_shape = torch_shape(origins);
+    const std::vector<py::ssize_t> direction_shape = torch_shape(directions);
+    if (ray_shape != direction_shape) {
+      throw py::value_error("origins and directions must have the same shape");
+    }
+    const std::size_t count = checked_torch_point_count(ray_shape, "origins");
+
+    const std::vector<py::ssize_t> sigma_shape = torch_shape(sigma);
+    if (sigma_shape.size() != 1) {
+      throw py::value_error("sigma must have shape (P,)");
+    }
+    const std::vector<py::ssize_t> color_shape = torch_shape(color);
+    if (color_shape.size() != 2 || color_shape[1] != 3) {
+      throw py::value_error("color must have shape (P, 3)");
+    }
+    if (sigma_shape[0] != color_shape[0]) {
+      throw py::value_error("sigma and color must have the same row count");
+    }
+    if (sigma_shape[0] < 0) {
+      throw py::value_error("sigma shape contains a negative dimension");
+    }
+    const std::size_t payload_rows = static_cast<std::size_t>(sigma_shape[0]);
+    validate_payload_rows(payload_rows);
+
+    py::object device = origins.attr("device");
+    const std::vector<py::ssize_t> depth_shape = torch_point_leading_shape(ray_shape);
+    std::vector<py::ssize_t> rgb_shape = depth_shape;
+    rgb_shape.push_back(3);
+    py::object rgb = torch_empty_like_device(torch, tuple_from_shape(rgb_shape), torch.attr("float32"), device);
+    py::object depth = torch_empty_like_device(torch, tuple_from_shape(depth_shape), torch.attr("float32"), device);
+    py::object opacity = torch_empty_like_device(torch, tuple_from_shape(depth_shape), torch.attr("float32"), device);
+    if (count == 0) {
+      return py::make_tuple(rgb, depth, opacity);
+    }
+
+    const svo::RenderOptions options = render_options_from_python(
+        near_plane,
+        far_plane,
+        background_color,
+        early_stop_transmittance,
+        store_aux,
+        enable_empty_space_skipping);
+    svo::CudaStreamHandle stream = torch_current_stream(torch, origins);
+    const auto* origin_data = reinterpret_cast<const glm::vec3*>(torch_data_ptr(origins));
+    const auto* direction_data = reinterpret_cast<const glm::vec3*>(torch_data_ptr(directions));
+    const auto* sigma_data = reinterpret_cast<const float*>(torch_data_ptr(sigma));
+    const auto* color_data = reinterpret_cast<const float*>(torch_data_ptr(color));
+    auto* rgb_data = reinterpret_cast<glm::vec3*>(torch_data_ptr(rgb));
+    auto* depth_data = reinterpret_cast<float*>(torch_data_ptr(depth));
+    auto* opacity_data = reinterpret_cast<float*>(torch_data_ptr(opacity));
+    CudaDeviceGuard guard(device_index_);
+    {
+      py::gil_scoped_release release;
+      svo::render_volume_cuda(
+          device_nodes_.data(),
+          device_nodes_.size(),
+          device_leaf_payload_indices_.data(),
+          device_leaf_payload_indices_.size(),
+          host_octree_.max_depth(),
+          host_octree_.root_bounds(),
+          origin_data,
+          direction_data,
+          sigma_data,
+          color_data,
+          rgb_data,
+          depth_data,
+          opacity_data,
+          count,
+          payload_rows,
+          options,
+          stream);
+    }
+
+    return py::make_tuple(rgb, depth, opacity);
+  }
+
+
  private:
   void validate_payload_rows(std::size_t payload_rows) const {
     for (std::uint32_t payload_index : host_octree_.leaf_payload_indices()) {
@@ -1490,6 +1718,19 @@ Returns:
     NumPy input or CUDA Torch tensors for Torch CUDA input.
 )pbdoc")
       .def(
+          "_render_volume_torch",
+          &CudaOctreeOwner::render_volume_torch,
+          py::arg("origins"),
+          py::arg("directions"),
+          py::arg("sigma"),
+          py::arg("color"),
+          py::arg("near_plane") = 0.0,
+          py::arg("far_plane") = std::numeric_limits<double>::infinity(),
+          py::arg("background_color") = py::make_tuple(0.0, 0.0, 0.0),
+          py::arg("early_stop_transmittance") = 1.0e-4,
+          py::arg("store_aux") = false,
+          py::arg("enable_empty_space_skipping") = true)
+      .def(
           "_sample_trilinear_torch",
           &CudaOctreeOwner::sample_trilinear_torch,
           py::arg("points"),
@@ -1539,6 +1780,26 @@ Returns:
 Sample leaf-centered payload values with trilinear interpolation on CPU.
 
 This private binding is wrapped by ``svo.sample_trilinear``.
+)pbdoc");
+
+  module.def(
+      "_render_volume_cpu",
+      &render_volume_cpu_binding,
+      py::arg("tree"),
+      py::arg("origins"),
+      py::arg("directions"),
+      py::arg("sigma"),
+      py::arg("color"),
+      py::arg("near_plane") = 0.0,
+      py::arg("far_plane") = std::numeric_limits<double>::infinity(),
+      py::arg("background_color") = py::make_tuple(0.0, 0.0, 0.0),
+      py::arg("early_stop_transmittance") = 1.0e-4,
+      py::arg("store_aux") = false,
+      py::arg("enable_empty_space_skipping") = true,
+      R"pbdoc(
+Render sigma/color leaf payloads along rays on CPU.
+
+This private binding is wrapped by ``svo.render_volume``.
 )pbdoc");
 
   module.def(

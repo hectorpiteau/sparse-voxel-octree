@@ -613,16 +613,23 @@ Goal: render an image from a camera using the octree and payload tensors.
 
 ### Tasks
 
-- [ ] Implement CPU reference renderer for tiny scenes.
-- [ ] Implement CUDA forward renderer.
-- [ ] Generate rays from camera.
-- [ ] Traverse octree.
-- [ ] Sample density/color along rays.
-- [ ] Implement alpha compositing.
-- [ ] Return image.
-- [ ] Return depth.
-- [ ] Return opacity.
+- [x] Implement CPU reference renderer for tiny scenes.
+- [x] Implement CUDA forward renderer.
+- [x] Generate rays from camera.
+- [x] Traverse octree.
+- [x] Sample density/color along rays.
+- [x] Implement alpha compositing.
+- [x] Return image/RGB.
+- [x] Return depth.
+- [x] Return opacity.
 - [ ] Return optional aux buffers for backward.
+
+Implemented scope:
+
+- Rays-first API: `svo.render_volume(tree, origins, directions, sigma, color, ...)`.
+- Payload layout: `sigma` shape `(P,)`, `color` shape `(P, 3)`, float32.
+- CUDA Torch path requires CUDA-owned octree and CUDA tensors to avoid hidden CPU/GPU transfers.
+- Aux buffers and autograd are deferred to Milestone 13.
 
 Volume rendering convention:
 
@@ -635,18 +642,18 @@ opacity = 1 - product_i(1 - alpha_i)
 
 ### Tests
 
-- [ ] Empty scene renders transparent/black.
-- [ ] Constant density cube.
-- [ ] Constant color cube.
-- [ ] Depth sanity.
-- [ ] CPU vs CUDA on tiny image.
-- [ ] Deterministic output.
-- [ ] No NaNs.
+- [x] Empty scene renders transparent/background.
+- [x] Constant density cube.
+- [x] Constant color cube.
+- [x] Depth sanity.
+- [x] CPU vs CUDA on tiny image/ray batches.
+- [x] Deterministic output.
+- [x] No NaNs for hit outputs.
 
 ### Acceptance criteria
 
-- [ ] Python can call `renderer(...)` and receive image/depth/opacity tensors.
-- [ ] CPU reference and CUDA agree for small scenes.
+- [x] Python can call `svo.render_volume(...)` and receive RGB/depth/opacity arrays or tensors.
+- [x] CPU reference and CUDA agree for small scenes.
 - [ ] Forward render example works.
 
 ---

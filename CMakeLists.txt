@@ -41,6 +41,7 @@ add_library(
   src/Octree.cpp
   src/Query.cpp
   src/Raycast.cpp
+  src/Renderer.cpp
   src/Version.cpp
 )
 add_library(svo::core ALIAS svo_core)
@@ -65,7 +66,7 @@ target_compile_definitions(
 )
 
 if(SVO_ENABLE_CUDA)
-  target_sources(svo_core PRIVATE cuda/generate_rays.cu cuda/interpolation.cu cuda/query_points.cu cuda/raycast.cu)
+  target_sources(svo_core PRIVATE cuda/generate_rays.cu cuda/interpolation.cu cuda/query_points.cu cuda/raycast.cu cuda/renderer.cu)
   set_target_properties(
     svo_core
     PROPERTIES
@@ -140,6 +141,10 @@ if(BUILD_TESTING AND SVO_BUILD_TESTS)
   target_link_libraries(svo_interpolation_test PRIVATE svo_core)
   add_test(NAME svo_interpolation_test COMMAND svo_interpolation_test)
 
+  add_executable(svo_renderer_test tests/cpp/test_renderer.cpp)
+  target_link_libraries(svo_renderer_test PRIVATE svo_core)
+  add_test(NAME svo_renderer_test COMMAND svo_renderer_test)
+
   add_executable(svo_camera_test tests/cpp/test_camera.cpp)
   target_link_libraries(svo_camera_test PRIVATE svo_core)
   add_test(NAME svo_camera_test COMMAND svo_camera_test)
@@ -164,6 +169,10 @@ if(BUILD_TESTING AND SVO_BUILD_TESTS)
     add_executable(svo_interpolation_cuda_test tests/cpp/test_interpolation_cuda.cpp)
     target_link_libraries(svo_interpolation_cuda_test PRIVATE svo_core)
     add_test(NAME svo_interpolation_cuda_test COMMAND svo_interpolation_cuda_test)
+
+    add_executable(svo_renderer_cuda_test tests/cpp/test_renderer_cuda.cpp)
+    target_link_libraries(svo_renderer_cuda_test PRIVATE svo_core)
+    add_test(NAME svo_renderer_cuda_test COMMAND svo_renderer_cuda_test)
 
     add_executable(svo_camera_cuda_test tests/cpp/test_camera_cuda.cpp)
     target_link_libraries(svo_camera_cuda_test PRIVATE svo_core)

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <svo/Math.hpp>
@@ -36,6 +37,11 @@ struct QueryOptions {
 };
 
 struct RenderOptions {
+  float near_plane = 0.0f;
+  float far_plane = std::numeric_limits<float>::infinity();
+  glm::vec3 background_color{0.0f, 0.0f, 0.0f};
+  float early_stop_transmittance = 1.0e-4f;
+  bool store_aux = false;
   bool enable_empty_space_skipping = true;
 };
 

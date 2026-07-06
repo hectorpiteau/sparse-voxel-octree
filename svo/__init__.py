@@ -5,6 +5,7 @@ __version__ = "0.1.0"
 from ._svo import Camera, CameraConvention, CameraIntrinsics, Octree, ValidationError, cuda_enabled
 from .payload import gather_payload
 from .interpolation import sample_trilinear
+from .rendering import render_volume
 
 __all__ = [
     "__version__",
@@ -16,6 +17,7 @@ __all__ = [
     "build_info",
     "gather_payload",
     "sample_trilinear",
+    "render_volume",
     "cuda_enabled",
 ]
 
