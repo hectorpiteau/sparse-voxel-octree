@@ -695,6 +695,7 @@ Goal: build installable Python wheels and source distributions.
 - [ ] Add `python -m svo.info`.
 - [ ] Add source distribution build.
 - [ ] Add wheel build.
+- [ ] Add Torch/CUDA compatibility matrix for public Python package support.
 - [ ] Add `uv publish` workflow.
 - [ ] Add package install tests.
 - [ ] Add README badges later if desired.
@@ -706,6 +707,8 @@ Goal: build installable Python wheels and source distributions.
 - [ ] `import svo` works from installed wheel.
 - [ ] Basic CPU tests pass from installed wheel.
 - [ ] CUDA tests pass from installed wheel on GPU runner.
+- [ ] Compatibility matrix documents supported Python, PyTorch, CUDA toolkit/runtime, NVIDIA driver, OS/architecture, and wheel variant combinations.
+- [ ] Matrix distinguishes tested, expected-supported, and unsupported combinations.
 
 ---
 
@@ -749,6 +752,7 @@ Goal: make the project usable by new developers and coding agents.
 - [ ] Add data layout document.
 - [ ] Add testing guide.
 - [ ] Add packaging guide.
+- [ ] Add Torch/CUDA compatibility matrix to installation and packaging docs.
 - [ ] Add troubleshooting guide.
 
 ### Examples
