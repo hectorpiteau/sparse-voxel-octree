@@ -612,6 +612,8 @@ class CudaOctreeOwner {
     svo::QueryOptions options;
     options.return_payload_indices = return_payload_indices;
     svo::CudaStreamHandle stream = torch_current_stream(torch, points);
+    const auto* point_data = reinterpret_cast<const glm::vec3*>(torch_data_ptr(points));
+    auto* result_data = reinterpret_cast<std::int32_t*>(torch_data_ptr(results));
     CudaDeviceGuard guard(device_index_);
     {
       py::gil_scoped_release release;
@@ -622,8 +624,8 @@ class CudaOctreeOwner {
           device_leaf_payload_indices_.size(),
           host_octree_.max_depth(),
           host_octree_.root_bounds(),
-          reinterpret_cast<const glm::vec3*>(torch_data_ptr(points)),
-          reinterpret_cast<std::int32_t*>(torch_data_ptr(results)),
+          point_data,
+          result_data,
           count,
           options,
           stream);
@@ -728,6 +730,13 @@ class CudaOctreeOwner {
     svo::RaycastOptions options;
     options.return_payload_indices = return_payload_indices;
     svo::CudaStreamHandle stream = torch_current_stream(torch, origins);
+    const auto* origin_data = reinterpret_cast<const glm::vec3*>(torch_data_ptr(origins));
+    const auto* direction_data = reinterpret_cast<const glm::vec3*>(torch_data_ptr(directions));
+    auto* hit_mask_data = reinterpret_cast<std::uint8_t*>(torch_data_ptr(hit_mask));
+    auto* leaf_id_data = reinterpret_cast<std::int32_t*>(torch_data_ptr(leaf_ids));
+    auto* t_data = reinterpret_cast<float*>(torch_data_ptr(t));
+    auto* position_data = reinterpret_cast<glm::vec3*>(torch_data_ptr(positions));
+    auto* depth_data = reinterpret_cast<std::int32_t*>(torch_data_ptr(depths));
     CudaDeviceGuard guard(device_index_);
     {
       py::gil_scoped_release release;
@@ -738,13 +747,13 @@ class CudaOctreeOwner {
           device_leaf_payload_indices_.size(),
           host_octree_.max_depth(),
           host_octree_.root_bounds(),
-          reinterpret_cast<const glm::vec3*>(torch_data_ptr(origins)),
-          reinterpret_cast<const glm::vec3*>(torch_data_ptr(directions)),
-          reinterpret_cast<std::uint8_t*>(torch_data_ptr(hit_mask)),
-          reinterpret_cast<std::int32_t*>(torch_data_ptr(leaf_ids)),
-          reinterpret_cast<float*>(torch_data_ptr(t)),
-          reinterpret_cast<glm::vec3*>(torch_data_ptr(positions)),
-          reinterpret_cast<std::int32_t*>(torch_data_ptr(depths)),
+          origin_data,
+          direction_data,
+          hit_mask_data,
+          leaf_id_data,
+          t_data,
+          position_data,
+          depth_data,
           count,
           options,
           stream);

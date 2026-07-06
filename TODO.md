@@ -533,38 +533,38 @@ Goal: let Python users keep query/raycast inputs, outputs, and payload gathering
 
 ### Tasks
 
-- [ ] Add optional Torch build/runtime integration without making Torch mandatory for CPU-only users.
-- [ ] Accept Torch CUDA point tensors for CUDA point query.
-- [ ] Accept Torch CUDA ray origin/direction tensors for CUDA raycast.
-- [ ] Return CUDA tensor outputs for CUDA query/raycast when inputs are CUDA tensors.
-- [ ] Support `torch.int32` payload/leaf ID outputs by default, with documented dtype behavior.
-- [ ] Make `svo.gather_payload` work on CUDA payload tensors and CUDA index tensors without device transfers.
-- [ ] Avoid CPU-GPU transfers on CUDA tensor hot paths; only explicit CPU-return APIs may copy results to host.
-- [ ] Reuse CUDA-resident topology and caller-provided CUDA tensors instead of staging through NumPy/CPU buffers.
-- [ ] Respect the current PyTorch CUDA stream or expose explicit stream behavior.
-- [ ] Avoid per-call topology transfers; require/use a CUDA-owned octree for hot paths.
-- [ ] Validate dtype, shape, contiguity, device, and lifetime before launching kernels.
-- [ ] Document synchronization behavior and avoid implicit host synchronization except for explicit CPU-return APIs.
+- [x] Add optional Torch build/runtime integration without making Torch mandatory for CPU-only users.
+- [x] Accept Torch CUDA point tensors for CUDA point query.
+- [x] Accept Torch CUDA ray origin/direction tensors for CUDA raycast.
+- [x] Return CUDA tensor outputs for CUDA query/raycast when inputs are CUDA tensors.
+- [x] Support `torch.int32` payload/leaf ID outputs by default, with documented dtype behavior.
+- [x] Make `svo.gather_payload` work on CUDA payload tensors and CUDA index tensors without device transfers.
+- [x] Avoid CPU-GPU transfers on CUDA tensor hot paths; only explicit CPU-return APIs may copy results to host.
+- [x] Reuse CUDA-resident topology and caller-provided CUDA tensors instead of staging through NumPy/CPU buffers.
+- [x] Respect the current PyTorch CUDA stream or expose explicit stream behavior.
+- [x] Avoid per-call topology transfers; require/use a CUDA-owned octree for hot paths.
+- [x] Validate dtype, shape, contiguity, device, and lifetime before launching kernels.
+- [x] Document synchronization behavior and avoid implicit host synchronization except for explicit CPU-return APIs.
 
 ### Tests
 
-- [ ] CUDA Torch query returns CUDA tensors and matches CPU reference after explicit `.cpu()`.
-- [ ] CUDA Torch raycast returns CUDA tensors and matches CPU/CUDA NumPy reference after explicit `.cpu()`.
-- [ ] CUDA Torch payload gather matches manual masked indexing on CUDA tensors.
-- [ ] Miss handling fills `-1` entries without indexing the last payload row.
-- [ ] Mixed-device inputs fail clearly.
-- [ ] Non-contiguous tensors fail clearly or are explicitly copied only when requested.
-- [ ] Current-stream behavior is tested with a non-default stream.
-- [ ] Transfer behavior is checked: CUDA tensor query/raycast/gather paths do not perform implicit host copies.
-- [ ] No hidden host synchronization in hot paths, verified by code review and profiler/manual check.
+- [x] CUDA Torch query returns CUDA tensors and matches CPU reference after explicit `.cpu()`.
+- [x] CUDA Torch raycast returns CUDA tensors and matches CPU/CUDA NumPy reference after explicit `.cpu()`.
+- [x] CUDA Torch payload gather matches manual masked indexing on CUDA tensors.
+- [x] Miss handling fills `-1` entries without indexing the last payload row.
+- [x] Mixed-device inputs fail clearly.
+- [x] Non-contiguous tensors fail clearly or are explicitly copied only when requested.
+- [x] Current-stream behavior is tested with a non-default stream.
+- [x] Transfer behavior is checked: CUDA tensor query/raycast/gather paths do not perform implicit host copies.
+- [x] No hidden host synchronization in hot paths, verified by code review and profiler/manual check.
 
 ### Acceptance criteria
 
-- [ ] Users can run `cuda_tree.query(torch_points_cuda)` and receive CUDA tensor IDs.
-- [ ] Users can run `svo.gather_payload(torch_payload_cuda, ids_cuda)` entirely on GPU.
-- [ ] Query/raycast + gather can be chained into downstream Torch CUDA operations without CPU copies.
-- [ ] CPU-GPU transfers are avoided or reduced to documented explicit API boundaries.
-- [ ] CPU-only installs still import and run without Torch.
+- [x] Users can run `cuda_tree.query(torch_points_cuda)` and receive CUDA tensor IDs.
+- [x] Users can run `svo.gather_payload(torch_payload_cuda, ids_cuda)` entirely on GPU.
+- [x] Query/raycast + gather can be chained into downstream Torch CUDA operations without CPU copies.
+- [x] CPU-GPU transfers are avoided or reduced to documented explicit API boundaries.
+- [x] CPU-only installs still import and run without Torch.
 
 ---
 
