@@ -14,7 +14,7 @@ option(SVO_ENABLE_PYTHON "Enable Python packaging hooks" OFF)
 option(SVO_ENABLE_TORCH "Enable PyTorch integration hooks" OFF)
 option(SVO_BUILD_TESTS "Build C++ smoke tests" ON)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -23,6 +23,9 @@ if(SVO_ENABLE_CUDA)
   check_language(CUDA)
   if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 20)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    set(CMAKE_CUDA_EXTENSIONS OFF)
     find_package(CUDAToolkit REQUIRED)
   else()
     message(WARNING "SVO_ENABLE_CUDA=ON but no CUDA compiler was found; disabling CUDA targets.")
@@ -41,7 +44,7 @@ target_include_directories(
     $<INSTALL_INTERFACE:include>
 )
 
-target_compile_features(svo_core PUBLIC cxx_std_17)
+target_compile_features(svo_core PUBLIC cxx_std_20)
 set_target_properties(svo_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_definitions(
   svo_core
@@ -54,6 +57,13 @@ target_compile_definitions(
 
 if(SVO_ENABLE_CUDA)
   target_sources(svo_core PRIVATE cuda/generate_rays.cu cuda/query_points.cu cuda/raycast.cu)
+  set_target_properties(
+    svo_core
+    PROPERTIES
+      CUDA_STANDARD 20
+      CUDA_STANDARD_REQUIRED ON
+      CUDA_EXTENSIONS OFF
+  )
   target_link_libraries(svo_core PUBLIC CUDA::cudart)
 
   add_executable(svo_point_query_benchmark benchmarks/cpp/point_query_benchmark.cpp)
@@ -87,7 +97,7 @@ if(SVO_ENABLE_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/include
       ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm
   )
-  target_compile_features(_svo PRIVATE cxx_std_17)
+  target_compile_features(_svo PRIVATE cxx_std_20)
 
   install(TARGETS _svo LIBRARY DESTINATION svo RUNTIME DESTINATION svo)
 endif()

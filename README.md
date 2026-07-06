@@ -28,7 +28,7 @@ The first implementation should prioritize correctness, clean APIs, and testabil
 
 Initial target:
 
-- C++17 / CUDA core.
+- C++20 / CUDA core.
 - GLM for C++ vector and matrix math in the core library.
 - Python bindings using `pybind11` or `nanobind`.
 - Build system based on CMake and `scikit-build-core`.
@@ -558,11 +558,16 @@ Possible optimizations:
 Requirements:
 
 - CMake >= 3.24.
-- C++17 compiler.
-- CUDA toolkit, for CUDA builds.
+- C++20-capable compiler.
+- CUDA 12.x toolkit, for CUDA builds.
 - Python >= 3.9.
 - `uv`.
 - Optional: PyTorch for `svo.torch`.
+
+Recommended compiler baseline for C++20 builds: GCC 11+, Clang 14+, MSVC 2022,
+or an equivalent compiler supported by the selected CUDA toolkit. CUDA device
+code should stay conservative with C++20 standard library features unless a
+specific use is verified with `nvcc`.
 
 Set up the project environment:
 

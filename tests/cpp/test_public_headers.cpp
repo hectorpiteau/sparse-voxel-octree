@@ -11,6 +11,12 @@
 
 #include <vector>
 
+#if defined(_MSVC_LANG)
+static_assert(_MSVC_LANG >= 202002L, "svo public headers must be compiled as C++20 or newer");
+#else
+static_assert(__cplusplus >= 202002L, "svo public headers must be compiled as C++20 or newer");
+#endif
+
 int main() {
   std::vector<glm::ivec3> coordinates{{0, 0, 0}};
   std::vector<glm::vec3> points{{0.25f, 0.25f, 0.25f}};

@@ -460,32 +460,70 @@ Goal: move the C++/CUDA core from C++17 to C++20 before adding heavier Torch CUD
 
 ### Tasks
 
-- [ ] Update CMake C++ standard from 17 to 20.
-- [ ] Update target compile features from `cxx_std_17` to `cxx_std_20`.
-- [ ] Update README and developer docs that mention C++17.
-- [ ] Document minimum supported compiler and CUDA expectations for C++20 builds.
-- [ ] Keep CUDA device code conservative; avoid C++20 standard library features in kernels unless verified with `nvcc`.
-- [ ] Verify CPU-only builds still work.
-- [ ] Verify CUDA builds still work.
-- [ ] Verify Python extension builds through `scikit-build-core`.
-- [ ] Check public headers still compile from an external target.
+- [x] Update CMake C++ standard from 17 to 20.
+- [x] Update target compile features from `cxx_std_17` to `cxx_std_20`.
+- [x] Update README and developer docs that mention C++17.
+- [x] Document minimum supported compiler and CUDA expectations for C++20 builds.
+- [x] Keep CUDA device code conservative; avoid C++20 standard library features in kernels unless verified with `nvcc`.
+- [x] Verify CPU-only builds still work.
+- [x] Verify CUDA builds still work.
+- [x] Verify Python extension builds through `scikit-build-core`.
+- [x] Check public headers still compile from an external target.
 
 ### Tests
 
-- [ ] CPU CMake configure/build passes.
-- [ ] CPU C++ test suite passes.
-- [ ] CUDA CMake configure/build passes.
-- [ ] CUDA C++ test suite passes.
-- [ ] Python package editable install passes.
-- [ ] Python test suite passes.
-- [ ] Wheel/source build still succeeds if practical.
+- [x] CPU CMake configure/build passes.
+- [x] CPU C++ test suite passes.
+- [x] CUDA CMake configure/build passes.
+- [x] CUDA C++ test suite passes.
+- [x] Python package editable install passes.
+- [x] Python test suite passes.
+- [x] Wheel/source build still succeeds if practical.
 
 ### Acceptance criteria
 
-- [ ] The project consistently builds as C++20.
-- [ ] README no longer advertises C++17 as the target standard.
-- [ ] CPU, CUDA, and Python build/test paths still pass.
-- [ ] Any compiler/CUDA version assumptions are documented.
+- [x] The project consistently builds as C++20.
+- [x] README no longer advertises C++17 as the target standard.
+- [x] CPU, CUDA, and Python build/test paths still pass.
+- [x] Any compiler/CUDA version assumptions are documented.
+
+---
+
+
+## Milestone 10.2 — C++20 idiom modernization audit
+
+Goal: modernize useful C++20 idioms after the standard migration without changing behavior or making CUDA device code fragile.
+
+### Notes
+
+- [ ] No deprecated C++17-era constructs were found in the current core scan (`std::auto_ptr`, `std::result_of`, old iterator adapters, raw owning `new/delete`, or `typedef`).
+- [ ] Keep changes pragmatic; do not refactor stable code just to use newer syntax.
+- [ ] Keep CUDA kernels conservative unless each C++20 feature is verified with `nvcc`.
+
+### Candidate follow-ups
+
+- [ ] Replace CPU-side manual bit counting helpers with `std::popcount` from `<bit>` where it improves clarity.
+- [ ] Keep CUDA-side bit counting explicit or use CUDA intrinsics such as `__popc`; do not assume `std::popcount` is device-safe without testing.
+- [ ] Consider `std::span` overloads for non-owning C++ batch inputs and buffer copy APIs to reduce `std::vector` coupling.
+- [ ] Replace local math constants such as camera pi with `std::numbers::pi_v<float>` where host-only.
+- [ ] Review sort/unique builder code for possible `std::ranges` use only if readability improves and compiler support remains clean.
+- [ ] Consolidate duplicated CUDA RAII test/benchmark helpers if it reduces maintenance without affecting public API.
+- [ ] Review repeated `static_cast` size/index conversions and add small checked conversion helpers only where they reduce real risk.
+- [ ] Consider lightweight concepts or `requires` only for public templates that need clearer diagnostics; avoid template complexity early.
+
+### Tests
+
+- [ ] CPU C++ tests pass after each modernization batch.
+- [ ] CUDA C++ tests pass for any touched CUDA-adjacent code.
+- [ ] Python tests pass if public APIs or bindings are touched.
+- [ ] Public header compile test remains clean under C++20.
+
+### Acceptance criteria
+
+- [ ] Modernizations are behavior-preserving.
+- [ ] No CUDA device code adopts unsupported C++20 library features.
+- [ ] API additions, if any, are backwards-compatible.
+- [ ] Code is clearer or safer after each change; purely cosmetic rewrites are avoided.
 
 ---
 
@@ -863,7 +901,7 @@ Goal: publish first differentiable rendering release.
 
 ### C++
 
-- Use C++17.
+- Use C++20.
 - Prefer RAII.
 - Avoid raw owning pointers.
 - Use explicit error handling.
