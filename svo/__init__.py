@@ -1,6 +1,11 @@
-"""Python package scaffold for sparse voxel octree bindings."""
+"""Python bindings for sparse-voxel-octree."""
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("sparse-voxel-octree")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
 
 from ._svo import BranchingMode, Camera, CameraConvention, CameraIntrinsics, Octree, ValidationError, cuda_enabled
 from .payload import gather_payload

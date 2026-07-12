@@ -2,5 +2,10 @@ import svo
 
 
 def test_import_smoke() -> None:
-    assert svo.__version__ == "0.1.0"
-    assert isinstance(svo.build_info()["cuda_enabled"], bool)
+    assert isinstance(svo.__version__, str)
+    assert svo.__version__
+    info = svo.build_info()
+    assert info["version"] == svo.__version__
+    assert isinstance(info["core_version"], str)
+    assert isinstance(info["cuda_enabled"], bool)
+    assert isinstance(info["extension_path"], str)

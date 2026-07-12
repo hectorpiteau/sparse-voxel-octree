@@ -750,26 +750,27 @@ Goal: build installable Python wheels and source distributions.
 
 ### Tasks
 
-- [ ] Finalize `pyproject.toml`.
-- [ ] Add package metadata.
-- [ ] Add versioning with `setuptools_scm` or equivalent.
-- [ ] Add `python -m svo.info`.
-- [ ] Add source distribution build.
-- [ ] Add wheel build.
-- [ ] Add Torch/CUDA compatibility matrix for public Python package support.
+- [x] Finalize `pyproject.toml`.
+- [x] Add package metadata.
+- [x] Add versioning with `setuptools_scm` or equivalent.
+- [x] Add `python -m svo.info`.
+- [x] Add source distribution build.
+- [x] Add wheel build.
+- [x] Add Torch/CUDA compatibility matrix for public Python package support.
+- [x] Make PyPI wheels Python-runtime-only; keep C++ headers/static library/CMake package in source/CMake installs.
 - [ ] Add `uv publish` workflow.
-- [ ] Add package install tests.
+- [x] Add package install tests.
 - [ ] Add README badges later if desired.
 
 ### Acceptance criteria
 
-- [ ] `uv build` succeeds.
-- [ ] Wheel installs in a clean virtual environment.
-- [ ] `import svo` works from installed wheel.
-- [ ] Basic CPU tests pass from installed wheel.
+- [x] `uv build` succeeds.
+- [x] Wheel installs in a clean virtual environment.
+- [x] `import svo` works from installed wheel.
+- [x] Basic CPU tests pass from installed wheel.
 - [ ] CUDA tests pass from installed wheel on GPU runner.
-- [ ] Compatibility matrix documents supported Python, PyTorch, CUDA toolkit/runtime, NVIDIA driver, OS/architecture, and wheel variant combinations.
-- [ ] Matrix distinguishes tested, expected-supported, and unsupported combinations.
+- [x] Compatibility matrix documents supported Python, PyTorch, CUDA toolkit/runtime, NVIDIA driver, OS/architecture, and wheel variant combinations.
+- [x] Matrix distinguishes tested, expected-supported, and unsupported/deferred combinations.
 
 ---
 

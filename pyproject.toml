@@ -1,28 +1,33 @@
 [build-system]
-requires = ["scikit-build-core>=0.10", "pybind11>=2.13"]
+requires = ["scikit-build-core>=1.0", "pybind11>=2.13", "setuptools_scm>=8"]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "sparse-voxel-octree"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Sparse voxel octree C++/CUDA library with Python bindings."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = ["numpy>=1.23"]
 license = { file = "LICENSE" }
 authors = [
   { name = "Hector Piteau", email = "hector.piteau@gmail.com" }
 ]
+keywords = ["cuda", "octree", "sparse-voxel-octree", "voxel", "volume-rendering"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
   "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: C++",
+  "Topic :: Multimedia :: Graphics :: 3D Rendering",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Software Development :: Libraries",
 ]
 
@@ -30,17 +35,42 @@ classifiers = [
 test = ["pytest>=8"]
 viz = ["matplotlib>=3.8"]
 viewer = ["pygame>=2.5"]
+torch = ["torch"]
 
 [project.urls]
-Repository = "https://example.com/sparse-voxel-octree"
+Homepage = "https://github.com/hectorpiteau/sparse-voxel-octree"
+Repository = "https://github.com/hectorpiteau/sparse-voxel-octree"
+Issues = "https://github.com/hectorpiteau/sparse-voxel-octree/issues"
 
 [tool.uv]
 default-groups = []
 
 [tool.scikit-build]
+minimum-version = "build-system.requires"
 cmake.version = ">=3.24"
 build-dir = "build/{wheel_tag}"
 wheel.packages = ["svo"]
+install.components = ["python"]
+sdist.include = [
+  "benchmarks/**",
+  "cuda/**",
+  "docs/assets/**",
+  "examples/**",
+  "include/**",
+  "python/**",
+  "scripts/**",
+  "src/**",
+  "tests/**",
+  "third_party/glm/**",
+  "CMakeLists.txt",
+]
 
 [tool.scikit-build.cmake.define]
 SVO_ENABLE_PYTHON = "ON"
+SVO_BUILD_TESTS = "OFF"
+
+[[tool.dynamic-metadata]]
+provider = "scikit_build_core.metadata.setuptools_scm"
+
+[tool.setuptools_scm]
+fallback_version = "0.1.0"

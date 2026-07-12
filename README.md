@@ -594,7 +594,7 @@ Requirements:
 - CMake >= 3.24.
 - C++20-capable compiler.
 - CUDA 12.x toolkit, for CUDA builds.
-- Python >= 3.9.
+- Python >= 3.10.
 - `uv`.
 - Optional: PyTorch for `svo.torch`.
 
@@ -619,6 +619,13 @@ Build distributions for PyPI:
 
 ```bash
 uv build
+```
+
+Validate built package artifacts and install the wheel in a clean temporary
+environment:
+
+```bash
+uv run python scripts/check_package.py
 ```
 
 Build with CMake directly:
@@ -652,14 +659,48 @@ The Python package should be built using:
 Initial wheels should target a small stable matrix:
 
 ```text
-Linux x86_64, Python 3.10-3.12, CUDA 12.x
-Windows x86_64, Python 3.10-3.12, CUDA 12.x
-macOS CPU-only, optional later
+Linux x86_64, Python 3.10-3.12, CPU-only wheel first
+Linux x86_64, Python 3.10-3.12, CUDA 12.x source builds
+Windows x86_64, Python 3.10-3.12, CUDA 12.x wheels later
+macOS CPU-only wheels later
 ```
 
 Do not attempt to support every CUDA version immediately.
 
 The project should publish a source distribution so advanced users can compile for their own CUDA version and GPU architecture.
+
+### Compatibility matrix
+
+| Platform | Python | CUDA | Torch | Wheel variant | Status |
+| --- | --- | --- | --- | --- | --- |
+| Linux x86_64 | 3.10 | none | optional CPU | CPU wheel | tested locally |
+| Linux x86_64 | 3.11, 3.12 | none | optional CPU | CPU wheel | expected-supported |
+| Linux x86_64 | 3.10-3.12 | local CUDA 12.x toolkit | optional CUDA Torch matching local runtime | source build | expected-supported |
+| Linux x86_64 | 3.10-3.12 | CUDA 12.x runtime | CUDA Torch | CUDA wheel | deferred to CI/release milestone |
+| Windows x86_64 | 3.10-3.12 | none or CUDA 12.x | optional | wheel | deferred |
+| macOS | 3.10-3.12 | unsupported | optional CPU | CPU wheel | deferred |
+
+The PyPI wheel is a Python runtime artifact. It contains the Python package and
+native extension, but not C++ headers, GLM headers, CMake package files, or the
+static C++ library. C++ users should build/install from source with CMake.
+
+CPU wheel install:
+
+```bash
+pip install sparse-voxel-octree
+python -m svo.info
+```
+
+CUDA source build:
+
+```bash
+pip install . -Ccmake.define.SVO_ENABLE_CUDA=ON
+python -m svo.info
+```
+
+Public CUDA wheel variants are intentionally deferred until the CI and release
+matrix can test Python, CUDA toolkit/runtime, NVIDIA driver, OS, architecture,
+and Torch compatibility together.
 
 ---
 
@@ -736,13 +777,21 @@ Expected output:
 
 ```text
 svo version: 0.1.0
+C++ core version: 0.1.0
+extension path: ...
 CUDA extension loaded: yes
-compiled CUDA version: 12.x
-available CUDA devices: 1
-device 0: NVIDIA ...
-compute capability: ...
+python version: 3.10.20
+python executable: ...
+platform: ...
+machine: x86_64
+numpy version: ...
 torch available: yes
+torch version: ...
+torch CUDA available: yes
 torch CUDA version: ...
+torch CUDA device count: 1
+torch CUDA device 0: NVIDIA ...
+torch CUDA interop available: yes
 ```
 
 This is important for debugging user installation issues.

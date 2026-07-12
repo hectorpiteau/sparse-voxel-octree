@@ -22,6 +22,7 @@
 #include <svo/Query.hpp>
 #include <svo/Raycast.hpp>
 #include <svo/Renderer.hpp>
+#include <svo/Version.hpp>
 
 namespace py = pybind11;
 using namespace pybind11::literals;
@@ -2070,6 +2071,11 @@ Render sigma/color leaf payloads along rays on CPU.
 
 This private binding is wrapped by ``svo.render_volume``.
 )pbdoc");
+
+  module.def(
+      "_core_version",
+      []() { return std::string{svo::version()}; },
+      "Return the compiled C++ core fallback version.");
 
   module.def(
       "cuda_enabled",

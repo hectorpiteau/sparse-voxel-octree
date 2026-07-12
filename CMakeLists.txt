@@ -89,14 +89,14 @@ endif()
 install(
   TARGETS svo_core
   EXPORT svoTargets
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
+  ARCHIVE DESTINATION lib COMPONENT dev
+  LIBRARY DESTINATION lib COMPONENT dev
+  RUNTIME DESTINATION bin COMPONENT dev
 )
 
-install(DIRECTORY include/svo DESTINATION include)
-install(DIRECTORY third_party/glm/glm DESTINATION include)
-install(FILES third_party/glm/copying.txt DESTINATION share/licenses/glm)
+install(DIRECTORY include/svo DESTINATION include COMPONENT dev)
+install(DIRECTORY third_party/glm/glm DESTINATION include COMPONENT dev)
+install(FILES third_party/glm/copying.txt DESTINATION share/licenses/glm COMPONENT dev)
 
 if(SVO_ENABLE_PYTHON)
   find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
@@ -112,13 +112,18 @@ if(SVO_ENABLE_PYTHON)
   )
   target_compile_features(_svo PRIVATE cxx_std_20)
 
-  install(TARGETS _svo LIBRARY DESTINATION svo RUNTIME DESTINATION svo)
+  install(
+    TARGETS _svo
+    LIBRARY DESTINATION svo COMPONENT python
+    RUNTIME DESTINATION svo COMPONENT python
+  )
 endif()
 
 install(
   EXPORT svoTargets
   NAMESPACE svo::
   DESTINATION lib/cmake/svo
+  COMPONENT dev
 )
 
 include(CTest)
