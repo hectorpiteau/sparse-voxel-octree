@@ -56,10 +56,10 @@ The actual voxel payload should live in separate buffers or tensors.
 
 ## Forward renderer example
 
-The forward renderer can render external density/color payloads indexed by the octree. This example builds a sparse sphere, colors it with smooth sinusoidal payloads, generates camera rays, and writes a PNG without extra visualization dependencies.
+The forward renderer can render external density/color payloads indexed by the octree. This example builds a sparse sphere, colors it with smooth sinusoidal payloads, generates camera rays, and writes a PNG without extra visualization dependencies. Use `--device auto` to use CUDA Torch rendering when available and CPU otherwise.
 
 ```bash
-./.venv/bin/python examples/python/forward_render.py --output docs/assets/forward_render.png
+./.venv/bin/python examples/python/forward_render.py --device auto --output docs/assets/forward_render.png
 ```
 
 ![Forward render of a colored sparse sphere](docs/assets/forward_render.png)

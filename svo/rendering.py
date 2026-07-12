@@ -18,6 +18,90 @@ def _is_torch_tensor(value: Any) -> bool:
     return torch.is_tensor(value)
 
 
+class _RenderVolumeFunction:
+    @staticmethod
+    def apply(
+        tree: Any,
+        origins: Any,
+        directions: Any,
+        sigma: Any,
+        color: Any,
+        near: float,
+        far: float,
+        background_color: tuple[float, float, float],
+        early_stop_transmittance: float,
+        enable_empty_space_skipping: bool,
+    ) -> tuple[Any, Any, Any]:
+        import torch
+
+        class _Function(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, origins_tensor, directions_tensor, sigma_tensor, color_tensor):
+                rgb, depth, opacity = tree._render_volume_torch(
+                    origins_tensor,
+                    directions_tensor,
+                    sigma_tensor,
+                    color_tensor,
+                    near,
+                    far,
+                    background_color,
+                    early_stop_transmittance,
+                    False,
+                    enable_empty_space_skipping,
+                )
+                ctx.tree = tree
+                ctx.near = near
+                ctx.far = far
+                ctx.background_color = background_color
+                ctx.early_stop_transmittance = early_stop_transmittance
+                ctx.enable_empty_space_skipping = enable_empty_space_skipping
+                ctx.save_for_backward(origins_tensor, directions_tensor, sigma_tensor, color_tensor)
+                ctx.mark_non_differentiable(depth)
+                return rgb, depth, opacity
+
+            @staticmethod
+            def backward(ctx, grad_rgb, grad_depth, grad_opacity):
+                del grad_depth
+                origins_tensor, directions_tensor, sigma_tensor, color_tensor = ctx.saved_tensors
+                if grad_rgb is None:
+                    grad_rgb = torch.zeros(
+                        (*origins_tensor.shape[:-1], 3),
+                        device=origins_tensor.device,
+                        dtype=torch.float32,
+                    )
+                if grad_opacity is None:
+                    grad_opacity = torch.zeros(
+                        origins_tensor.shape[:-1],
+                        device=origins_tensor.device,
+                        dtype=torch.float32,
+                    )
+
+                grad_sigma = None
+                grad_color = None
+                if ctx.needs_input_grad[2] or ctx.needs_input_grad[3]:
+                    grad_sigma_tensor, grad_color_tensor = ctx.tree._render_volume_backward_torch(
+                        origins_tensor,
+                        directions_tensor,
+                        sigma_tensor,
+                        color_tensor,
+                        grad_rgb.contiguous(),
+                        grad_opacity.contiguous(),
+                        ctx.near,
+                        ctx.far,
+                        ctx.background_color,
+                        ctx.early_stop_transmittance,
+                        False,
+                        ctx.enable_empty_space_skipping,
+                    )
+                    if ctx.needs_input_grad[2]:
+                        grad_sigma = grad_sigma_tensor
+                    if ctx.needs_input_grad[3]:
+                        grad_color = grad_color_tensor
+                return None, None, grad_sigma, grad_color
+
+        return _Function.apply(origins, directions, sigma, color)
+
+
 def render_volume(
     tree: Any,
     origins: Any,
@@ -36,12 +120,13 @@ def render_volume(
 
     NumPy inputs run the CPU reference path and return NumPy arrays. CUDA Torch
     inputs run on a CUDA-owned octree from ``tree.to("cuda")`` and return CUDA
-    Torch tensors. Shapes are ``(N, 3)`` or ``(H, W, 3)`` for rays, ``(P,)``
-    for ``sigma``, and ``(P, 3)`` for ``color``.
+    Torch tensors. Torch CUDA rendering supports autograd for ``sigma`` and
+    ``color``; depth is forward-only. Shapes are ``(N, 3)`` or ``(H, W, 3)``
+    for rays, ``(P,)`` for ``sigma``, and ``(P, 3)`` for ``color``.
     """
 
     if store_aux:
-        raise NotImplementedError("renderer aux buffers are reserved for the renderer backward milestone")
+        raise NotImplementedError("renderer aux buffers are not exposed; backward recomputes traversal")
 
     far_plane = inf if far is None else float(far)
     if isinstance(origins, np.ndarray) or isinstance(directions, np.ndarray) or isinstance(sigma, np.ndarray) or isinstance(color, np.ndarray):
@@ -70,7 +155,8 @@ def render_volume(
             raise TypeError("origins, directions, sigma, and color must all be Torch tensors for CUDA rendering")
         if not hasattr(tree, "_render_volume_torch"):
             raise TypeError("Torch rendering requires a CUDA-owned octree from tree.to('cuda')")
-        return tree._render_volume_torch(
+        return _RenderVolumeFunction.apply(
+            tree,
             origins,
             directions,
             sigma,
@@ -79,7 +165,6 @@ def render_volume(
             far_plane,
             background_color,
             float(early_stop_transmittance),
-            False,
             bool(enable_empty_space_skipping),
         )
 

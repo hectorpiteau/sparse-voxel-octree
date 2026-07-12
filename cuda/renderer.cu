@@ -15,6 +15,7 @@ namespace {
 constexpr float kEpsilon = 1.0e-6f;
 constexpr int kMaxDepth = 30;
 constexpr int kMaxStackEntries = 8 * (kMaxDepth + 1);
+constexpr int kMaxRenderSegments = 512;
 
 struct AabbDevice {
   glm::vec3 min;
@@ -325,6 +326,288 @@ __device__ void render_single_device(
   depth = accum.opacity > 0.0f ? accum.depth / accum.opacity : CUDART_INF_F;
 }
 
+struct RenderSegmentDevice {
+  std::uint32_t payload_index = 0u;
+  float raw_sigma = 0.0f;
+  float delta = 0.0f;
+  float alpha = 0.0f;
+  float transmittance = 1.0f;
+  glm::vec3 color{0.0f, 0.0f, 0.0f};
+};
+
+__device__ float dot_vec3_device(const glm::vec3& lhs, const glm::vec3& rhs) noexcept {
+  return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
+}
+
+__device__ bool append_render_segment_device(
+    const std::uint32_t* leaf_payload_indices,
+    std::size_t num_leaves,
+    const float* sigma,
+    const float* color,
+    std::size_t payload_rows,
+    const StackEntryDevice& segment,
+    float near_plane,
+    float far_plane,
+    RenderSegmentDevice* segments,
+    int& segment_count,
+    float& transmittance) noexcept {
+  if (segment.leaf_id < 0 || static_cast<std::size_t>(segment.leaf_id) >= num_leaves) {
+    return true;
+  }
+
+  const float t0 = fmaxf(fmaxf(segment.t_near, near_plane), 0.0f);
+  const float t1 = fminf(segment.t_far, far_plane);
+  if (t1 <= t0) {
+    return true;
+  }
+
+  const std::uint32_t payload_index = leaf_payload_indices[static_cast<std::size_t>(segment.leaf_id)];
+  if (static_cast<std::size_t>(payload_index) >= payload_rows) {
+    return true;
+  }
+
+  const float raw_sigma = sigma[static_cast<std::size_t>(payload_index)];
+  const float density = fmaxf(raw_sigma, 0.0f);
+  if (density <= 0.0f) {
+    return true;
+  }
+
+  if (segment_count >= kMaxRenderSegments) {
+    return false;
+  }
+
+  const float delta = t1 - t0;
+  const float alpha = 1.0f - expf(-density * delta);
+  const std::size_t color_index = static_cast<std::size_t>(payload_index) * 3u;
+  RenderSegmentDevice output;
+  output.payload_index = payload_index;
+  output.raw_sigma = raw_sigma;
+  output.delta = delta;
+  output.alpha = alpha;
+  output.transmittance = transmittance;
+  output.color = {color[color_index], color[color_index + 1u], color[color_index + 2u]};
+  segments[segment_count++] = output;
+  transmittance *= 1.0f - alpha;
+  return true;
+}
+
+__device__ bool collect_render_segments_device(
+    const NodeDescriptor* nodes,
+    std::size_t num_nodes,
+    const std::uint32_t* leaf_payload_indices,
+    std::size_t num_leaves,
+    int max_depth,
+    const AabbDevice& root_bounds,
+    const glm::vec3& origin,
+    const glm::vec3& direction,
+    const float* sigma,
+    const float* color,
+    std::size_t payload_rows,
+    float near_plane,
+    float far_plane,
+    float early_stop_transmittance,
+    RenderSegmentDevice* segments,
+    int& segment_count) noexcept {
+  segment_count = 0;
+  if (num_nodes == 0 || !finite_vec3_device(origin)) {
+    return true;
+  }
+
+  bool valid_direction = false;
+  const glm::vec3 normalized_direction = normalize_or_zero_device(direction, valid_direction);
+  if (!valid_direction) {
+    return true;
+  }
+
+  float root_t_near = 0.0f;
+  float root_t_far = 0.0f;
+  if (!intersect_aabb_device(root_bounds, origin, normalized_direction, root_t_near, root_t_far) ||
+      !segment_overlaps_device(root_t_near, root_t_far, near_plane, far_plane)) {
+    return true;
+  }
+
+  float transmittance = 1.0f;
+  if (max_depth == 0) {
+    StackEntryDevice root_leaf;
+    root_leaf.leaf = true;
+    root_leaf.leaf_id = 0;
+    root_leaf.bounds = root_bounds;
+    root_leaf.t_near = root_t_near;
+    root_leaf.t_far = root_t_far;
+    return append_render_segment_device(
+        leaf_payload_indices,
+        num_leaves,
+        sigma,
+        color,
+        payload_rows,
+        root_leaf,
+        near_plane,
+        far_plane,
+        segments,
+        segment_count,
+        transmittance);
+  }
+
+  StackEntryDevice stack[kMaxStackEntries];
+  int stack_size = 0;
+  stack[stack_size++] = StackEntryDevice{false, 0u, -1, max_depth, root_bounds, root_t_near, root_t_far};
+
+  while (stack_size > 0 && transmittance > early_stop_transmittance) {
+    const StackEntryDevice entry = stack[--stack_size];
+    if (entry.leaf) {
+      if (!append_render_segment_device(
+              leaf_payload_indices,
+              num_leaves,
+              sigma,
+              color,
+              payload_rows,
+              entry,
+              near_plane,
+              far_plane,
+              segments,
+              segment_count,
+              transmittance)) {
+        return false;
+      }
+      continue;
+    }
+    if (entry.node_index >= num_nodes || entry.depth_remaining <= 0) {
+      continue;
+    }
+
+    const NodeDescriptor descriptor = nodes[entry.node_index];
+    const std::uint8_t child_mask = descriptor.child_mask();
+    const std::uint8_t leaf_mask = descriptor.leaf_mask();
+    const std::uint8_t internal_mask = descriptor.internal_child_mask();
+    StackEntryDevice candidates[8];
+    int candidate_count = 0;
+
+    for (int child_index = 0; child_index < 8; ++child_index) {
+      const std::uint8_t child_bit = static_cast<std::uint8_t>(1u << child_index);
+      if ((child_mask & child_bit) == 0u) {
+        continue;
+      }
+
+      const AabbDevice child = child_bounds_device(entry.bounds, child_index);
+      float t_near = 0.0f;
+      float t_far = 0.0f;
+      if (!intersect_aabb_device(child, origin, normalized_direction, t_near, t_far) ||
+          !segment_overlaps_device(t_near, t_far, near_plane, far_plane)) {
+        continue;
+      }
+
+      StackEntryDevice candidate;
+      candidate.leaf = (leaf_mask & child_bit) != 0u;
+      candidate.bounds = child;
+      candidate.t_near = t_near;
+      candidate.t_far = t_far;
+      if (candidate.leaf) {
+        candidate.leaf_id = static_cast<std::int32_t>(
+            static_cast<std::size_t>(descriptor.payload_base()) +
+            static_cast<std::size_t>(prefix_rank_device(leaf_mask, child_index)));
+      } else {
+        candidate.node_index = static_cast<std::size_t>(descriptor.child_base()) +
+            static_cast<std::size_t>(prefix_rank_device(internal_mask, child_index));
+        candidate.depth_remaining = entry.depth_remaining - 1;
+      }
+      candidates[candidate_count++] = candidate;
+    }
+
+    sort_candidates_device(candidates, candidate_count, near_plane);
+    for (int index = candidate_count - 1; index >= 0; --index) {
+      if (stack_size >= kMaxStackEntries) {
+        return false;
+      }
+      stack[stack_size++] = candidates[index];
+    }
+  }
+
+  return true;
+}
+
+__global__ void render_volume_backward_kernel(
+    const NodeDescriptor* nodes,
+    std::size_t num_nodes,
+    const std::uint32_t* leaf_payload_indices,
+    std::size_t num_leaves,
+    int max_depth,
+    glm::vec3 min_bound,
+    glm::vec3 max_bound,
+    const glm::vec3* origins,
+    const glm::vec3* directions,
+    const float* sigma,
+    const float* color,
+    const glm::vec3* grad_rgb,
+    const float* grad_opacity,
+    float* grad_sigma,
+    float* grad_color,
+    std::size_t count,
+    std::size_t payload_rows,
+    float near_plane,
+    float far_plane,
+    glm::vec3 background_color,
+    float early_stop_transmittance,
+    int* overflow_count) {
+  const std::size_t ray_index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
+      static_cast<std::size_t>(threadIdx.x);
+  if (ray_index >= count) {
+    return;
+  }
+
+  RenderSegmentDevice segments[kMaxRenderSegments];
+  int segment_count = 0;
+  const bool collected = collect_render_segments_device(
+      nodes,
+      num_nodes,
+      leaf_payload_indices,
+      num_leaves,
+      max_depth,
+      AabbDevice{min_bound, max_bound},
+      origins[ray_index],
+      directions[ray_index],
+      sigma,
+      color,
+      payload_rows,
+      near_plane,
+      far_plane,
+      early_stop_transmittance,
+      segments,
+      segment_count);
+  if (!collected) {
+    atomicAdd(overflow_count, 1);
+    return;
+  }
+
+  const glm::vec3 upstream_rgb = grad_rgb[ray_index];
+  const float upstream_opacity = grad_opacity[ray_index];
+  glm::vec3 suffix_rgb = background_color;
+  float suffix_transmittance = 1.0f;
+
+  for (int index = segment_count - 1; index >= 0; --index) {
+    const RenderSegmentDevice segment = segments[index];
+    const float one_minus_alpha = 1.0f - segment.alpha;
+    const float weight = segment.transmittance * segment.alpha;
+    const std::size_t color_index = static_cast<std::size_t>(segment.payload_index) * 3u;
+
+    atomicAdd(&grad_color[color_index], upstream_rgb.x * weight);
+    atomicAdd(&grad_color[color_index + 1u], upstream_rgb.y * weight);
+    atomicAdd(&grad_color[color_index + 2u], upstream_rgb.z * weight);
+
+    const glm::vec3 color_delta = segment.color - suffix_rgb;
+    const float grad_alpha =
+        segment.transmittance * dot_vec3_device(upstream_rgb, color_delta) +
+        upstream_opacity * segment.transmittance * suffix_transmittance;
+    if (segment.raw_sigma > 0.0f) {
+      atomicAdd(
+          &grad_sigma[static_cast<std::size_t>(segment.payload_index)],
+          grad_alpha * segment.delta * one_minus_alpha);
+    }
+
+    suffix_rgb = segment.alpha * segment.color + one_minus_alpha * suffix_rgb;
+    suffix_transmittance = one_minus_alpha * suffix_transmittance;
+  }
+}
+
 __global__ void render_volume_kernel(
     const NodeDescriptor* nodes,
     std::size_t num_nodes,
@@ -478,5 +761,91 @@ void render_volume_cuda(
 
   check_cuda_launch(cudaGetLastError(), "render_volume_kernel launch");
 }
+
+void render_volume_backward_cuda(
+    const NodeDescriptor* nodes,
+    std::size_t num_nodes,
+    const std::uint32_t* leaf_payload_indices,
+    std::size_t num_leaves,
+    int max_depth,
+    const RootBounds& root_bounds,
+    const glm::vec3* origins,
+    const glm::vec3* directions,
+    const float* sigma,
+    const float* color,
+    const glm::vec3* grad_rgb,
+    const float* grad_opacity,
+    float* grad_sigma,
+    float* grad_color,
+    std::size_t count,
+    std::size_t payload_rows,
+    const RenderOptions& options,
+    CudaStreamHandle stream) {
+  if (max_depth < 0 || max_depth > kMaxDepth) {
+    throw ValidationError("max_depth must be in the range [0, 30]");
+  }
+  validate_options(options);
+  check_not_null(nodes, num_nodes, "nodes");
+  check_not_null(leaf_payload_indices, num_leaves, "leaf_payload_indices");
+  check_not_null(origins, count, "origins");
+  check_not_null(directions, count, "directions");
+  check_not_null(grad_rgb, count, "grad_rgb");
+  check_not_null(grad_opacity, count, "grad_opacity");
+  check_not_null(sigma, payload_rows, "sigma");
+  if (payload_rows != 0 && color == nullptr) {
+    throw ValidationError("color cannot be null when payload_rows is non-zero");
+  }
+  check_not_null(grad_sigma, payload_rows, "grad_sigma");
+  check_not_null(grad_color, payload_rows * 3u, "grad_color");
+
+  if (count == 0) {
+    return;
+  }
+
+  constexpr int kBlockSize = 128;
+  const int grid_size = static_cast<int>((count + static_cast<std::size_t>(kBlockSize) - 1u) /
+      static_cast<std::size_t>(kBlockSize));
+  cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  int* device_overflow_count = nullptr;
+  check_cuda_launch(cudaMalloc(&device_overflow_count, sizeof(int)), "cudaMalloc renderer backward overflow counter");
+  check_cuda_launch(cudaMemsetAsync(device_overflow_count, 0, sizeof(int), cuda_stream), "cudaMemsetAsync renderer backward overflow counter");
+
+  render_volume_backward_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
+      nodes,
+      num_nodes,
+      leaf_payload_indices,
+      num_leaves,
+      max_depth,
+      root_bounds[0],
+      root_bounds[1],
+      origins,
+      directions,
+      sigma,
+      color,
+      grad_rgb,
+      grad_opacity,
+      grad_sigma,
+      grad_color,
+      count,
+      payload_rows,
+      options.near_plane,
+      options.far_plane,
+      options.background_color,
+      options.early_stop_transmittance,
+      device_overflow_count);
+
+  check_cuda_launch(cudaGetLastError(), "render_volume_backward_kernel launch");
+  int host_overflow_count = 0;
+  check_cuda_launch(
+      cudaMemcpyAsync(&host_overflow_count, device_overflow_count, sizeof(int), cudaMemcpyDeviceToHost, cuda_stream),
+      "cudaMemcpyAsync renderer backward overflow counter");
+  check_cuda_launch(cudaStreamSynchronize(cuda_stream), "cudaStreamSynchronize renderer backward overflow counter");
+  check_cuda_launch(cudaFree(device_overflow_count), "cudaFree renderer backward overflow counter");
+  if (host_overflow_count != 0) {
+    throw Error("render_volume_backward_cuda exceeded the per-ray segment cache; reduce scene depth or split rays");
+  }
+}
+
 
 }  // namespace svo

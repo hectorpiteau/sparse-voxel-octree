@@ -1264,6 +1264,107 @@ class CudaOctreeOwner {
     return grad_payload;
   }
 
+  py::object render_volume_backward_torch(
+      py::object origins,
+      py::object directions,
+      py::object sigma,
+      py::object color,
+      py::object grad_rgb,
+      py::object grad_opacity,
+      double near_plane,
+      double far_plane,
+      py::object background_color,
+      double early_stop_transmittance,
+      bool store_aux,
+      bool enable_empty_space_skipping) const {
+    py::object torch = import_torch();
+    check_torch_float32_tensor(torch, origins, "origins", device_index_);
+    check_torch_float32_tensor(torch, directions, "directions", device_index_);
+    check_torch_float32_tensor(torch, sigma, "sigma", device_index_);
+    check_torch_float32_tensor(torch, color, "color", device_index_);
+    check_torch_float32_tensor(torch, grad_rgb, "grad_rgb", device_index_);
+    check_torch_float32_tensor(torch, grad_opacity, "grad_opacity", device_index_);
+
+    const std::vector<py::ssize_t> ray_shape = torch_shape(origins);
+    const std::vector<py::ssize_t> direction_shape = torch_shape(directions);
+    if (ray_shape != direction_shape) {
+      throw py::value_error("origins and directions must have the same shape");
+    }
+    const std::size_t count = checked_torch_point_count(ray_shape, "origins");
+
+    const std::vector<py::ssize_t> sigma_shape = torch_shape(sigma);
+    if (sigma_shape.size() != 1) {
+      throw py::value_error("sigma must have shape (P,)");
+    }
+    const std::vector<py::ssize_t> color_shape = torch_shape(color);
+    if (color_shape.size() != 2 || color_shape[1] != 3) {
+      throw py::value_error("color must have shape (P, 3)");
+    }
+    if (sigma_shape[0] != color_shape[0]) {
+      throw py::value_error("sigma and color must have the same row count");
+    }
+    if (sigma_shape[0] < 0) {
+      throw py::value_error("sigma shape contains a negative dimension");
+    }
+    const std::size_t payload_rows = static_cast<std::size_t>(sigma_shape[0]);
+    validate_payload_rows(payload_rows);
+
+    std::vector<py::ssize_t> opacity_shape = torch_point_leading_shape(ray_shape);
+    std::vector<py::ssize_t> rgb_shape = opacity_shape;
+    rgb_shape.push_back(3);
+    check_torch_shape_equals(grad_rgb, rgb_shape, "grad_rgb");
+    check_torch_shape_equals(grad_opacity, opacity_shape, "grad_opacity");
+
+    py::object grad_sigma = torch.attr("zeros_like")(sigma);
+    py::object grad_color = torch.attr("zeros_like")(color);
+    if (count == 0) {
+      return py::make_tuple(grad_sigma, grad_color);
+    }
+
+    const svo::RenderOptions options = render_options_from_python(
+        near_plane,
+        far_plane,
+        background_color,
+        early_stop_transmittance,
+        store_aux,
+        enable_empty_space_skipping);
+    svo::CudaStreamHandle stream = torch_current_stream(torch, origins);
+    const auto* origin_data = reinterpret_cast<const glm::vec3*>(torch_data_ptr(origins));
+    const auto* direction_data = reinterpret_cast<const glm::vec3*>(torch_data_ptr(directions));
+    const auto* sigma_data = reinterpret_cast<const float*>(torch_data_ptr(sigma));
+    const auto* color_data = reinterpret_cast<const float*>(torch_data_ptr(color));
+    const auto* grad_rgb_data = reinterpret_cast<const glm::vec3*>(torch_data_ptr(grad_rgb));
+    const auto* grad_opacity_data = reinterpret_cast<const float*>(torch_data_ptr(grad_opacity));
+    auto* grad_sigma_data = reinterpret_cast<float*>(torch_data_ptr(grad_sigma));
+    auto* grad_color_data = reinterpret_cast<float*>(torch_data_ptr(grad_color));
+    CudaDeviceGuard guard(device_index_);
+    {
+      py::gil_scoped_release release;
+      svo::render_volume_backward_cuda(
+          device_nodes_.data(),
+          device_nodes_.size(),
+          device_leaf_payload_indices_.data(),
+          device_leaf_payload_indices_.size(),
+          host_octree_.max_depth(),
+          host_octree_.root_bounds(),
+          origin_data,
+          direction_data,
+          sigma_data,
+          color_data,
+          grad_rgb_data,
+          grad_opacity_data,
+          grad_sigma_data,
+          grad_color_data,
+          count,
+          payload_rows,
+          options,
+          stream);
+    }
+
+    return py::make_tuple(grad_sigma, grad_color);
+  }
+
+
   py::object render_volume_torch(
       py::object origins,
       py::object directions,
@@ -1717,6 +1818,21 @@ Returns:
     Tuple (hit_mask, leaf_ids, t, positions, depths), using NumPy arrays for
     NumPy input or CUDA Torch tensors for Torch CUDA input.
 )pbdoc")
+      .def(
+          "_render_volume_backward_torch",
+          &CudaOctreeOwner::render_volume_backward_torch,
+          py::arg("origins"),
+          py::arg("directions"),
+          py::arg("sigma"),
+          py::arg("color"),
+          py::arg("grad_rgb"),
+          py::arg("grad_opacity"),
+          py::arg("near_plane") = 0.0,
+          py::arg("far_plane") = std::numeric_limits<double>::infinity(),
+          py::arg("background_color") = py::make_tuple(0.0, 0.0, 0.0),
+          py::arg("early_stop_transmittance") = 1.0e-4,
+          py::arg("store_aux") = false,
+          py::arg("enable_empty_space_skipping") = true)
       .def(
           "_render_volume_torch",
           &CudaOctreeOwner::render_volume_torch,

@@ -53,6 +53,26 @@ void render_volume_cuda(
     std::size_t payload_rows,
     const RenderOptions& options = {},
     CudaStreamHandle stream = nullptr);
+
+void render_volume_backward_cuda(
+    const NodeDescriptor* nodes,
+    std::size_t num_nodes,
+    const std::uint32_t* leaf_payload_indices,
+    std::size_t num_leaves,
+    int max_depth,
+    const RootBounds& root_bounds,
+    const glm::vec3* origins,
+    const glm::vec3* directions,
+    const float* sigma,
+    const float* color,
+    const glm::vec3* grad_rgb,
+    const float* grad_opacity,
+    float* grad_sigma,
+    float* grad_color,
+    std::size_t count,
+    std::size_t payload_rows,
+    const RenderOptions& options = {},
+    CudaStreamHandle stream = nullptr);
 #endif
 
 }  // namespace svo

@@ -664,35 +664,87 @@ Goal: integrate custom CUDA backward with PyTorch autograd.
 
 ### Tasks
 
-- [ ] Define saved forward state.
-- [ ] Implement compositing backward.
-- [ ] Implement interpolation backward.
-- [ ] Scatter-add gradients into density.
-- [ ] Scatter-add gradients into color.
+- [x] Define saved forward state.
+- [x] Implement compositing backward.
+- [x] Recompute renderer traversal in backward.
+- [x] Scatter-add gradients into density.
+- [x] Scatter-add gradients into color.
 - [ ] Support feature gradients if features are rendered.
-- [ ] Add `torch.autograd.Function`.
+- [x] Add `torch.autograd.Function`.
 - [ ] Add `torch.nn.Module` wrapper.
-- [ ] Add gradcheck tests.
+- [x] Add finite-difference gradient tests.
+
+Implemented scope:
+
+- CUDA Torch backward for `sigma` and `color` payloads.
+- Gradients from RGB and opacity outputs; depth remains forward-only.
+- Backward recomputes traversal and uses atomic adds into payload gradients.
+- Renderer remains float32-only; formal float64 `gradcheck` is deferred.
 
 ### Tests
 
-- [ ] Gradcheck color.
-- [ ] Gradcheck density.
+- [x] Finite-difference color gradient check.
+- [x] Finite-difference density gradient check.
 - [ ] Gradcheck features, if implemented.
-- [ ] Loss backward smoke test.
+- [x] Loss backward smoke test.
 - [ ] Optimization loop reduces loss on tiny target.
-- [ ] No race conditions.
-- [ ] Deterministic or documented nondeterministic scatter behavior.
+- [x] No race conditions under compute-sanitizer for covered cases.
+- [x] Atomic scatter behavior is documented by tests as numerically tolerant.
 
 ### Acceptance criteria
 
-- [ ] `loss.backward()` works.
-- [ ] Custom PyTorch losses work.
-- [ ] Gradients are correct for stable tiny scenes.
+- [x] `loss.backward()` works for CUDA Torch `sigma` and `color`.
+- [x] Custom PyTorch losses over RGB and opacity work.
+- [x] Gradients are correct for stable tiny scenes within float32 finite-difference tolerances.
 
 ---
 
-## Milestone 14 — Packaging
+## Milestone 14 — Wide 4x4x4 sparse nodes
+
+Goal: add a sparse wide-tree topology option with 64 children per node to reduce traversal depth and benchmark it against the current 2x2x2 octree layout.
+
+Design direction:
+
+- Start with a tree-level 4x4x4 branching mode, not arbitrary per-node branching.
+- Keep topology separate from payload buffers.
+- Keep gradient/compositing math independent from descriptor decoding where practical.
+- Preserve the current 8-way octree path until the wide path is validated.
+
+### Tasks
+
+- [ ] Define the public/API representation for branching mode or a dedicated wide-tree type.
+- [ ] Design a 64-child descriptor format with child occupancy, leaf flags, child base, and payload base.
+- [ ] Implement CPU builder for 4x4x4 sparse nodes.
+- [ ] Implement CPU query traversal for wide nodes.
+- [ ] Implement CUDA query traversal for wide nodes.
+- [ ] Implement CPU raycast traversal for wide nodes.
+- [ ] Implement CUDA raycast traversal for wide nodes.
+- [ ] Implement CPU forward render traversal for wide nodes.
+- [ ] Implement CUDA forward render traversal for wide nodes.
+- [ ] Update renderer backward traversal after Milestone 13 exists.
+- [ ] Add benchmarks comparing 8-way vs 64-way traversal at equal voxel resolution.
+- [ ] Document memory/layout tradeoffs and when to choose each topology.
+
+### Tests
+
+- [ ] Builder output validation for empty, single voxel, dense small cube, and sparse random scenes.
+- [ ] CPU query parity between 8-way and 64-way trees for equivalent occupied coordinates.
+- [ ] CUDA query parity with CPU wide query.
+- [ ] CPU/CUDA raycast parity for wide nodes.
+- [ ] CPU/CUDA forward render parity for wide nodes.
+- [ ] Backward renderer parity/gradcheck after wide traversal is wired into Milestone 13 code.
+- [ ] Edge cases at 4x4x4 child boundaries.
+
+### Acceptance criteria
+
+- [ ] Wide nodes reduce traversal depth for equivalent voxel resolution.
+- [ ] Wide-node CPU and CUDA results match existing 8-way behavior for equivalent scenes.
+- [ ] Benchmarks show whether wide nodes improve query/raycast/render performance enough to justify the memory tradeoff.
+- [ ] Existing 8-way tests and APIs remain working.
+
+---
+
+## Milestone 15 — Packaging
 
 Goal: build installable Python wheels and source distributions.
 
@@ -721,7 +773,7 @@ Goal: build installable Python wheels and source distributions.
 
 ---
 
-## Milestone 15 — CI
+## Milestone 16 — CI
 
 Goal: continuous integration for correctness and packaging.
 
@@ -746,7 +798,7 @@ Goal: continuous integration for correctness and packaging.
 
 ---
 
-## Milestone 16 — Documentation and examples
+## Milestone 17 — Documentation and examples
 
 Goal: make the project usable by new developers and coding agents.
 
@@ -782,7 +834,7 @@ Goal: make the project usable by new developers and coding agents.
 
 ---
 
-## Milestone 17 — Optimization pass
+## Milestone 18 — Optimization pass
 
 Goal: improve performance after correctness is established.
 
@@ -812,7 +864,7 @@ Goal: improve performance after correctness is established.
 
 ---
 
-## Milestone 18 — Advanced sparse layout
+## Milestone 19 — Advanced sparse layout
 
 Goal: move toward a more compact production layout.
 
@@ -833,7 +885,7 @@ Goal: move toward a more compact production layout.
 
 ---
 
-## Milestone 19 — Release 0.1
+## Milestone 20 — Release 0.1
 
 Goal: publish a minimal useful release.
 
@@ -868,7 +920,7 @@ Goal: publish a minimal useful release.
 
 ---
 
-## Milestone 20 — Release 0.2
+## Milestone 21 — Release 0.2
 
 Goal: publish first CUDA-focused release.
 
@@ -888,7 +940,7 @@ Goal: publish first CUDA-focused release.
 
 ---
 
-## Milestone 21 — Release 0.3
+## Milestone 22 — Release 0.3
 
 Goal: publish first differentiable rendering release.
 

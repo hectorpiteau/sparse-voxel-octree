@@ -121,10 +121,117 @@ void test_cuda_matches_cpu_for_sparse_tree_and_clipping() {
   compare_cuda_to_cpu(octree, origins, directions, sigma, color, options);
 }
 
+
+void test_cuda_backward_single_leaf_matches_analytic_gradient() {
+  svo::BuildOptions build_options;
+  build_options.max_depth = 0;
+  const svo::Octree octree = svo::Octree::from_voxels_cpu({{0, 0, 0}}, build_options);
+  const std::vector<glm::vec3> origins{{-1.0f, 0.5f, 0.5f}};
+  const std::vector<glm::vec3> directions{{1.0f, 0.0f, 0.0f}};
+  const std::vector<float> sigma{2.0f};
+  const std::vector<float> color{0.8f, 0.2f, 0.1f};
+  const std::vector<glm::vec3> grad_rgb{{1.0f, 1.0f, 1.0f}};
+  const std::vector<float> grad_opacity{1.0f};
+  const std::vector<float> zeros_sigma{0.0f};
+  const std::vector<float> zeros_color{0.0f, 0.0f, 0.0f};
+
+  auto device_nodes = svo::DeviceBuffer<svo::NodeDescriptor>::from_host(octree.nodes(), svo::Device::CUDA);
+  auto device_payload_indices =
+      svo::DeviceBuffer<std::uint32_t>::from_host(octree.leaf_payload_indices(), svo::Device::CUDA);
+  auto device_origins = svo::DeviceBuffer<glm::vec3>::from_host(origins, svo::Device::CUDA);
+  auto device_directions = svo::DeviceBuffer<glm::vec3>::from_host(directions, svo::Device::CUDA);
+  auto device_sigma = svo::DeviceBuffer<float>::from_host(sigma, svo::Device::CUDA);
+  auto device_color = svo::DeviceBuffer<float>::from_host(color, svo::Device::CUDA);
+  auto device_grad_rgb = svo::DeviceBuffer<glm::vec3>::from_host(grad_rgb, svo::Device::CUDA);
+  auto device_grad_opacity = svo::DeviceBuffer<float>::from_host(grad_opacity, svo::Device::CUDA);
+  auto device_grad_sigma = svo::DeviceBuffer<float>::from_host(zeros_sigma, svo::Device::CUDA);
+  auto device_grad_color = svo::DeviceBuffer<float>::from_host(zeros_color, svo::Device::CUDA);
+
+  svo::render_volume_backward_cuda(
+      device_nodes.data(),
+      device_nodes.size(),
+      device_payload_indices.data(),
+      device_payload_indices.size(),
+      octree.max_depth(),
+      octree.root_bounds(),
+      device_origins.data(),
+      device_directions.data(),
+      device_sigma.data(),
+      device_color.data(),
+      device_grad_rgb.data(),
+      device_grad_opacity.data(),
+      device_grad_sigma.data(),
+      device_grad_color.data(),
+      origins.size(),
+      sigma.size());
+
+  const std::vector<float> actual_sigma = device_grad_sigma.to_host();
+  const std::vector<float> actual_color = device_grad_color.to_host();
+  const float alpha = 1.0f - std::exp(-2.0f);
+  const float expected_sigma = (1.0f + color[0] + color[1] + color[2]) * (1.0f - alpha);
+  require_close(actual_sigma[0], expected_sigma, 2.0e-5f, "backward sigma gradient");
+  require_close(actual_color[0], alpha, 2.0e-5f, "backward color r gradient");
+  require_close(actual_color[1], alpha, 2.0e-5f, "backward color g gradient");
+  require_close(actual_color[2], alpha, 2.0e-5f, "backward color b gradient");
+}
+
+void test_cuda_backward_negative_sigma_has_zero_gradient() {
+  svo::BuildOptions build_options;
+  build_options.max_depth = 0;
+  const svo::Octree octree = svo::Octree::from_voxels_cpu({{0, 0, 0}}, build_options);
+  const std::vector<glm::vec3> origins{{-1.0f, 0.5f, 0.5f}};
+  const std::vector<glm::vec3> directions{{1.0f, 0.0f, 0.0f}};
+  const std::vector<float> sigma{-1.0f};
+  const std::vector<float> color{0.8f, 0.2f, 0.1f};
+  const std::vector<glm::vec3> grad_rgb{{1.0f, 1.0f, 1.0f}};
+  const std::vector<float> grad_opacity{1.0f};
+  const std::vector<float> zeros_sigma{0.0f};
+  const std::vector<float> zeros_color{0.0f, 0.0f, 0.0f};
+
+  auto device_nodes = svo::DeviceBuffer<svo::NodeDescriptor>::from_host(octree.nodes(), svo::Device::CUDA);
+  auto device_payload_indices =
+      svo::DeviceBuffer<std::uint32_t>::from_host(octree.leaf_payload_indices(), svo::Device::CUDA);
+  auto device_origins = svo::DeviceBuffer<glm::vec3>::from_host(origins, svo::Device::CUDA);
+  auto device_directions = svo::DeviceBuffer<glm::vec3>::from_host(directions, svo::Device::CUDA);
+  auto device_sigma = svo::DeviceBuffer<float>::from_host(sigma, svo::Device::CUDA);
+  auto device_color = svo::DeviceBuffer<float>::from_host(color, svo::Device::CUDA);
+  auto device_grad_rgb = svo::DeviceBuffer<glm::vec3>::from_host(grad_rgb, svo::Device::CUDA);
+  auto device_grad_opacity = svo::DeviceBuffer<float>::from_host(grad_opacity, svo::Device::CUDA);
+  auto device_grad_sigma = svo::DeviceBuffer<float>::from_host(zeros_sigma, svo::Device::CUDA);
+  auto device_grad_color = svo::DeviceBuffer<float>::from_host(zeros_color, svo::Device::CUDA);
+
+  svo::render_volume_backward_cuda(
+      device_nodes.data(),
+      device_nodes.size(),
+      device_payload_indices.data(),
+      device_payload_indices.size(),
+      octree.max_depth(),
+      octree.root_bounds(),
+      device_origins.data(),
+      device_directions.data(),
+      device_sigma.data(),
+      device_color.data(),
+      device_grad_rgb.data(),
+      device_grad_opacity.data(),
+      device_grad_sigma.data(),
+      device_grad_color.data(),
+      origins.size(),
+      sigma.size());
+
+  const std::vector<float> actual_sigma = device_grad_sigma.to_host();
+  const std::vector<float> actual_color = device_grad_color.to_host();
+  require_close(actual_sigma[0], 0.0f, 1.0e-7f, "negative sigma gradient");
+  require_close(actual_color[0], 0.0f, 1.0e-7f, "negative color r gradient");
+  require_close(actual_color[1], 0.0f, 1.0e-7f, "negative color g gradient");
+  require_close(actual_color[2], 0.0f, 1.0e-7f, "negative color b gradient");
+}
+
 }  // namespace
 
 int main() {
   test_cuda_matches_cpu_for_dense_tree();
   test_cuda_matches_cpu_for_sparse_tree_and_clipping();
+  test_cuda_backward_single_leaf_matches_analytic_gradient();
+  test_cuda_backward_negative_sigma_has_zero_gradient();
   return 0;
 }

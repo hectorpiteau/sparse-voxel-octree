@@ -4,7 +4,7 @@ The octree stores occupied voxels inside a sphere. Density is strongest near the
 sphere center, and RGB payloads vary smoothly with sine functions over position.
 
 Example:
-    ./.venv/bin/python examples/python/forward_render.py --output docs/assets/forward_render.png
+    ./.venv/bin/python examples/python/forward_render.py --device auto --output docs/assets/forward_render.png
 """
 
 from __future__ import annotations
@@ -16,10 +16,13 @@ import time
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 
 import svo
+
+RenderDevice = Literal["auto", "cpu", "cuda"]
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,27 @@ class SphereVolumeConfig:
     @property
     def max_depth(self) -> int:
         return int(math.log2(self.grid_size))
+
+
+@dataclass(frozen=True)
+class SceneData:
+    tree: svo.Octree
+    origins: np.ndarray
+    directions: np.ndarray
+    sigma: np.ndarray
+    color: np.ndarray
+    build_seconds: float
+
+
+@dataclass(frozen=True)
+class RenderResult:
+    rgb: np.ndarray
+    depth: np.ndarray
+    opacity: np.ndarray
+    device: str
+    render_seconds: float
+    upload_seconds: float = 0.0
+    download_seconds: float = 0.0
 
 
 def _png_chunk(tag: bytes, payload: bytes) -> bytes:
@@ -91,7 +115,7 @@ def build_sphere_payloads(config: SphereVolumeConfig) -> tuple[np.ndarray, np.nd
     return coords_array, payload_indices, sigma, color
 
 
-def render_sphere(config: SphereVolumeConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray, svo.Octree, float, float]:
+def build_scene(config: SphereVolumeConfig) -> SceneData:
     build_start = time.perf_counter()
     coords, payload_indices, sigma, color = build_sphere_payloads(config)
     tree = svo.Octree.from_voxels(
@@ -99,7 +123,6 @@ def render_sphere(config: SphereVolumeConfig) -> tuple[np.ndarray, np.ndarray, n
         max_depth=config.max_depth,
         payload_indices=payload_indices,
     )
-    build_seconds = time.perf_counter() - build_start
 
     camera = svo.Camera.look_at(
         origin=[1.45, 0.95, 1.45],
@@ -110,9 +133,54 @@ def render_sphere(config: SphereVolumeConfig) -> tuple[np.ndarray, np.ndarray, n
         vertical_fov_y_degrees=35.0,
     )
     origins, directions = camera.generate_rays()
+    build_seconds = time.perf_counter() - build_start
+    return SceneData(tree, origins, directions, sigma, color, build_seconds)
+
+
+def render_cpu(scene: SceneData) -> RenderResult:
     render_start = time.perf_counter()
     rgb, depth, opacity = svo.render_volume(
-        tree,
+        scene.tree,
+        scene.origins,
+        scene.directions,
+        scene.sigma,
+        scene.color,
+        background_color=(0.018, 0.022, 0.030),
+        early_stop_transmittance=2.0e-3,
+    )
+    render_seconds = time.perf_counter() - render_start
+    return RenderResult(rgb, depth, opacity, "cpu", render_seconds)
+
+
+def torch_cuda_available() -> bool:
+    if not svo.cuda_enabled():
+        return False
+    try:
+        import torch
+    except ModuleNotFoundError:
+        return False
+    return bool(torch.cuda.is_available())
+
+
+def render_cuda(scene: SceneData) -> RenderResult:
+    if not torch_cuda_available():
+        raise RuntimeError("CUDA rendering requires a CUDA-enabled SVO build and torch.cuda")
+
+    import torch
+
+    upload_start = time.perf_counter()
+    cuda_tree = scene.tree.to("cuda")
+    origins = torch.as_tensor(scene.origins, device="cuda")
+    directions = torch.as_tensor(scene.directions, device="cuda")
+    sigma = torch.as_tensor(scene.sigma, device="cuda")
+    color = torch.as_tensor(scene.color, device="cuda")
+    torch.cuda.synchronize()
+    upload_seconds = time.perf_counter() - upload_start
+
+    torch.cuda.synchronize()
+    render_start = time.perf_counter()
+    rgb_t, depth_t, opacity_t = svo.render_volume(
+        cuda_tree,
         origins,
         directions,
         sigma,
@@ -120,8 +188,25 @@ def render_sphere(config: SphereVolumeConfig) -> tuple[np.ndarray, np.ndarray, n
         background_color=(0.018, 0.022, 0.030),
         early_stop_transmittance=2.0e-3,
     )
+    torch.cuda.synchronize()
     render_seconds = time.perf_counter() - render_start
-    return rgb, depth, opacity, tree, build_seconds, render_seconds
+
+    download_start = time.perf_counter()
+    rgb = rgb_t.cpu().numpy()
+    depth = depth_t.cpu().numpy()
+    opacity = opacity_t.cpu().numpy()
+    download_seconds = time.perf_counter() - download_start
+    return RenderResult(rgb, depth, opacity, "cuda", render_seconds, upload_seconds, download_seconds)
+
+
+def resolve_device(requested: RenderDevice) -> str:
+    if requested == "cpu":
+        return "cpu"
+    if requested == "cuda":
+        if not torch_cuda_available():
+            raise RuntimeError("--device cuda requested, but CUDA Torch rendering is not available")
+        return "cuda"
+    return "cuda" if torch_cuda_available() else "cpu"
 
 
 def tonemap(rgb: np.ndarray, depth: np.ndarray, opacity: np.ndarray) -> np.ndarray:
@@ -146,6 +231,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=360, help="Render width in pixels.")
     parser.add_argument("--height", type=int, default=260, help="Render height in pixels.")
     parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "cuda"),
+        default="auto",
+        help="Render backend. auto uses CUDA Torch when available, otherwise CPU.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("docs/assets/forward_render.png"),
@@ -169,14 +260,22 @@ def main() -> None:
         width=args.width,
         height=args.height,
     )
-    rgb, depth, opacity, tree, build_seconds, render_seconds = render_sphere(config)
+    scene = build_scene(config)
+    device = resolve_device(args.device)
+    result = render_cuda(scene) if device == "cuda" else render_cpu(scene)
+
     write_start = time.perf_counter()
-    image = tonemap(rgb, depth, opacity)
+    image = tonemap(result.rgb, result.depth, result.opacity)
     write_png(args.output, image)
     write_seconds = time.perf_counter() - write_start
 
-    print(f"Built {tree.num_leaves} occupied leaves at depth {tree.max_depth} in {build_seconds * 1000.0:.2f} ms")
-    print(f"Forward render: {render_seconds * 1000.0:.2f} ms for {args.width}x{args.height} rays")
+    print(f"Backend: {result.device}")
+    print(f"Built {scene.tree.num_leaves} occupied leaves at depth {scene.tree.max_depth} in {scene.build_seconds * 1000.0:.2f} ms")
+    if result.device == "cuda":
+        print(f"CUDA upload: {result.upload_seconds * 1000.0:.2f} ms")
+    print(f"Forward render: {result.render_seconds * 1000.0:.2f} ms for {args.width}x{args.height} rays")
+    if result.device == "cuda":
+        print(f"CUDA download: {result.download_seconds * 1000.0:.2f} ms")
     print(f"Tonemap + PNG write: {write_seconds * 1000.0:.2f} ms")
     print(f"Saved render to {args.output}")
 

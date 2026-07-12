@@ -126,3 +126,98 @@ def test_render_volume_torch_cuda_preserves_image_shape_when_available() -> None
     np.testing.assert_allclose(rgb.cpu().numpy(), expected[0], atol=2e-5)
     np.testing.assert_allclose(depth.cpu().numpy(), expected[1], atol=2e-5, equal_nan=True)
     np.testing.assert_allclose(opacity.cpu().numpy(), expected[2], atol=2e-5)
+
+
+def test_render_volume_torch_cuda_backward_matches_single_leaf_analytic_gradient() -> None:
+    torch = _torch_cuda()
+    tree = svo.Octree.from_voxels(np.array([[0, 0, 0]], dtype=np.int32), max_depth=0)
+    cuda_tree = tree.to("cuda")
+    origins = torch.tensor([[-1.0, 0.5, 0.5]], device="cuda", dtype=torch.float32)
+    directions = torch.tensor([[1.0, 0.0, 0.0]], device="cuda", dtype=torch.float32)
+    sigma = torch.tensor([2.0], device="cuda", dtype=torch.float32, requires_grad=True)
+    color = torch.tensor([[0.8, 0.2, 0.1]], device="cuda", dtype=torch.float32, requires_grad=True)
+
+    rgb, depth, opacity = svo.render_volume(cuda_tree, origins, directions, sigma, color)
+    loss = rgb.sum() + opacity.sum()
+    loss.backward()
+
+    alpha = np.float32(1.0 - np.exp(-2.0))
+    expected_sigma = np.float32((1.0 + 0.8 + 0.2 + 0.1) * (1.0 - alpha))
+    assert depth.requires_grad is False
+    np.testing.assert_allclose(sigma.grad.detach().cpu().numpy(), [expected_sigma], atol=2e-5)
+    np.testing.assert_allclose(color.grad.detach().cpu().numpy(), np.full((1, 3), alpha, dtype=np.float32), atol=2e-5)
+
+
+def test_render_volume_torch_cuda_backward_finite_difference_when_available() -> None:
+    torch = _torch_cuda()
+    tree = svo.Octree.from_voxels(np.array([[0, 0, 0]], dtype=np.int32), max_depth=0)
+    cuda_tree = tree.to("cuda")
+    origins_np = np.array([[-1.0, 0.5, 0.5]], dtype=np.float32)
+    directions_np = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
+    sigma_np = np.array([1.4], dtype=np.float32)
+    color_np = np.array([[0.3, 0.6, 0.9]], dtype=np.float32)
+
+    origins = torch.tensor(origins_np, device="cuda", dtype=torch.float32)
+    directions = torch.tensor(directions_np, device="cuda", dtype=torch.float32)
+    sigma = torch.tensor(sigma_np, device="cuda", dtype=torch.float32, requires_grad=True)
+    color = torch.tensor(color_np, device="cuda", dtype=torch.float32, requires_grad=True)
+    rgb, _depth, opacity = svo.render_volume(cuda_tree, origins, directions, sigma, color)
+    (0.7 * rgb[..., 0].sum() + 0.2 * rgb[..., 1].sum() + 0.4 * opacity.sum()).backward()
+
+    def cpu_loss(candidate_sigma: np.ndarray, candidate_color: np.ndarray) -> float:
+        rgb_np, _depth_np, opacity_np = svo.render_volume(tree, origins_np, directions_np, candidate_sigma, candidate_color)
+        return float(0.7 * rgb_np[..., 0].sum() + 0.2 * rgb_np[..., 1].sum() + 0.4 * opacity_np.sum())
+
+    eps = np.float32(1.0e-3)
+    sigma_plus = sigma_np.copy()
+    sigma_minus = sigma_np.copy()
+    sigma_plus[0] += eps
+    sigma_minus[0] -= eps
+    expected_sigma = (cpu_loss(sigma_plus, color_np) - cpu_loss(sigma_minus, color_np)) / float(2.0 * eps)
+
+    color_plus = color_np.copy()
+    color_minus = color_np.copy()
+    color_plus[0, 1] += eps
+    color_minus[0, 1] -= eps
+    expected_color_g = (cpu_loss(sigma_np, color_plus) - cpu_loss(sigma_np, color_minus)) / float(2.0 * eps)
+
+    np.testing.assert_allclose(sigma.grad.detach().cpu().numpy()[0], expected_sigma, atol=3e-3, rtol=2e-2)
+    np.testing.assert_allclose(color.grad.detach().cpu().numpy()[0, 1], expected_color_g, atol=3e-3, rtol=2e-2)
+
+
+def test_render_volume_depth_is_forward_only_when_available() -> None:
+    torch = _torch_cuda()
+    tree = svo.Octree.from_voxels(np.array([[0, 0, 0]], dtype=np.int32), max_depth=0)
+    cuda_tree = tree.to("cuda")
+    origins = torch.tensor([[-1.0, 0.5, 0.5]], device="cuda", dtype=torch.float32)
+    directions = torch.tensor([[1.0, 0.0, 0.0]], device="cuda", dtype=torch.float32)
+    sigma = torch.tensor([1.0], device="cuda", dtype=torch.float32, requires_grad=True)
+    color = torch.tensor([[1.0, 0.0, 0.0]], device="cuda", dtype=torch.float32, requires_grad=True)
+
+    _rgb, depth, _opacity = svo.render_volume(cuda_tree, origins, directions, sigma, color)
+
+    assert depth.requires_grad is False
+    with pytest.raises(RuntimeError, match="does not require grad"):
+        depth.sum().backward()
+
+
+def test_render_volume_torch_cuda_backward_current_stream_when_available() -> None:
+    torch = _torch_cuda()
+    tree = svo.Octree.from_voxels(np.array([[0, 0, 0], [1, 0, 0]], dtype=np.int32), max_depth=1)
+    cuda_tree = tree.to("cuda")
+    origins = torch.tensor([[-1.0, 0.25, 0.25]], device="cuda", dtype=torch.float32)
+    directions = torch.tensor([[1.0, 0.0, 0.0]], device="cuda", dtype=torch.float32)
+    sigma = torch.tensor([1.0, 2.0], device="cuda", dtype=torch.float32, requires_grad=True)
+    color = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], device="cuda", dtype=torch.float32, requires_grad=True)
+    stream = torch.cuda.Stream()
+
+    with torch.cuda.stream(stream):
+        rgb, _depth, opacity = svo.render_volume(cuda_tree, origins, directions, sigma, color)
+        loss = rgb.sum() + opacity.sum()
+        loss.backward()
+
+    stream.synchronize()
+    assert sigma.grad is not None
+    assert color.grad is not None
+    assert torch.isfinite(sigma.grad).all()
+    assert torch.isfinite(color.grad).all()
