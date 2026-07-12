@@ -133,6 +133,14 @@ bool is_better_hit(const HitCandidate& candidate, const HitCandidate& best) noex
   return std::fabs(candidate.t - best.t) <= kEpsilon && candidate.leaf_id < best.leaf_id;
 }
 
+void add_stat(std::uint64_t& field, std::uint64_t value = 1) noexcept {
+  field += value;
+}
+
+void update_max_stat(std::uint64_t& field, std::uint64_t value) noexcept {
+  field = std::max(field, value);
+}
+
 void consider_leaf(
     const Octree& octree,
     const glm::vec3& origin,
@@ -146,6 +154,9 @@ void consider_leaf(
   float t_far = 0.0f;
   if (!intersect_aabb(bounds, origin, direction, t_near, t_far)) {
     return;
+  }
+  if (options.stats != nullptr) {
+    add_stat(options.stats->leaf_segments);
   }
 
   HitCandidate candidate;
@@ -174,6 +185,10 @@ void traverse_node(
   if (node_index >= octree.nodes().size() || depth_remaining <= 0) {
     return;
   }
+  if (options.stats != nullptr) {
+    add_stat(options.stats->nodes_visited);
+    add_stat(options.stats->stack_pops);
+  }
 
   const NodeDescriptor descriptor = octree.nodes()[node_index];
   const std::uint8_t child_mask = descriptor.child_mask();
@@ -184,6 +199,9 @@ void traverse_node(
     const std::uint8_t child_bit = static_cast<std::uint8_t>(1u << child_index);
     if ((child_mask & child_bit) == 0u) {
       continue;
+    }
+    if (options.stats != nullptr) {
+      add_stat(options.stats->child_candidates_tested);
     }
 
     const Aabb child = child_bounds(bounds, child_index);
@@ -207,6 +225,12 @@ void traverse_node(
 
     const std::size_t child_node_index = static_cast<std::size_t>(descriptor.child_base()) +
         static_cast<std::size_t>(prefix_rank(internal_mask, child_index));
+    if (options.stats != nullptr) {
+      add_stat(options.stats->stack_pushes);
+      update_max_stat(
+          options.stats->max_stack_depth,
+          static_cast<std::uint64_t>(octree.max_depth() - depth_remaining + 2));
+    }
     traverse_node(
         octree,
         child_node_index,
@@ -231,6 +255,10 @@ void traverse_wide_node(
   if (node_index >= octree.wide_nodes().size() || depth_remaining <= 0) {
     return;
   }
+  if (options.stats != nullptr) {
+    add_stat(options.stats->nodes_visited);
+    add_stat(options.stats->stack_pops);
+  }
 
   const WideNodeDescriptor descriptor = octree.wide_nodes()[node_index];
   const std::uint64_t child_mask = descriptor.child_mask();
@@ -240,6 +268,9 @@ void traverse_wide_node(
   for (std::uint64_t active_mask = child_mask; active_mask != 0u; active_mask &= active_mask - 1u) {
     const int child_index = std::countr_zero(active_mask);
     const std::uint64_t child_bit = 1ull << child_index;
+    if (options.stats != nullptr) {
+      add_stat(options.stats->child_candidates_tested);
+    }
 
     const Aabb child = wide_child_bounds(bounds, child_index);
     float t_near = 0.0f;
@@ -262,6 +293,12 @@ void traverse_wide_node(
 
     const std::size_t child_node_index = static_cast<std::size_t>(descriptor.child_base()) +
         static_cast<std::size_t>(prefix_rank(internal_mask, child_index));
+    if (options.stats != nullptr) {
+      add_stat(options.stats->stack_pushes);
+      update_max_stat(
+          options.stats->max_stack_depth,
+          static_cast<std::uint64_t>(octree.max_depth() - depth_remaining + 3));
+    }
     traverse_wide_node(
         octree,
         child_node_index,
@@ -312,6 +349,10 @@ HitCandidate raycast_one(
     return best;
   }
 
+  if (options.stats != nullptr) {
+    add_stat(options.stats->stack_pushes);
+    update_max_stat(options.stats->max_stack_depth, 1);
+  }
   if (octree.branching() == BranchingMode::Wide4) {
     traverse_wide_node(octree, 0, octree.max_depth(), root, origin, normalized, options, best);
   } else {

@@ -57,6 +57,22 @@ __device__ int count_bits_device(std::uint64_t value) noexcept {
   return __popcll(static_cast<unsigned long long>(value));
 }
 
+__device__ void add_stat_device(std::uint64_t* field, std::uint64_t value = 1u) noexcept {
+  if (field != nullptr) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long*>(field),
+        static_cast<unsigned long long>(value));
+  }
+}
+
+__device__ void max_stat_device(std::uint64_t* field, std::uint64_t value) noexcept {
+  if (field != nullptr) {
+    atomicMax(
+        reinterpret_cast<unsigned long long*>(field),
+        static_cast<unsigned long long>(value));
+  }
+}
+
 __device__ int prefix_rank_device(std::uint8_t mask, int child_index) noexcept {
   if (child_index <= 0) {
     return 0;
@@ -186,6 +202,7 @@ __device__ void composite_leaf_device(
     float near_plane,
     float far_plane,
     float early_stop_transmittance,
+    TraversalStats* stats,
     AccumulatorDevice& accum) noexcept {
   (void)early_stop_transmittance;
   if (segment.leaf_id < 0 || static_cast<std::size_t>(segment.leaf_id) >= num_leaves) {
@@ -197,6 +214,7 @@ __device__ void composite_leaf_device(
   if (t1 <= t0) {
     return;
   }
+  add_stat_device(stats != nullptr ? &stats->leaf_segments : nullptr);
 
   const std::uint32_t payload_index = leaf_payload_indices[static_cast<std::size_t>(segment.leaf_id)];
   if (static_cast<std::size_t>(payload_index) >= payload_rows) {
@@ -236,6 +254,7 @@ __device__ void render_single_device(
     float far_plane,
     glm::vec3 background_color,
     float early_stop_transmittance,
+    TraversalStats* stats,
     glm::vec3& rgb,
     float& depth,
     float& opacity) noexcept {
@@ -265,11 +284,14 @@ __device__ void render_single_device(
               near_plane,
               far_plane,
               early_stop_transmittance,
+              stats,
               accum);
         } else {
           StackEntryDevice stack[kMaxStackEntries];
           int stack_size = 0;
           stack[stack_size++] = StackEntryDevice{false, 0u, -1, max_depth, root_bounds, root_t_near, root_t_far};
+          add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+          max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
 
           while (stack_size > 0 && accum.transmittance > early_stop_transmittance) {
             const StackEntryDevice entry = stack[--stack_size];
@@ -284,12 +306,15 @@ __device__ void render_single_device(
                   near_plane,
                   far_plane,
                   early_stop_transmittance,
+                  stats,
                   accum);
               continue;
             }
             if (entry.node_index >= num_nodes || entry.depth_remaining <= 0) {
               continue;
             }
+            add_stat_device(stats != nullptr ? &stats->nodes_visited : nullptr);
+            add_stat_device(stats != nullptr ? &stats->stack_pops : nullptr);
 
             const NodeDescriptor descriptor = nodes[entry.node_index];
             const std::uint8_t child_mask = descriptor.child_mask();
@@ -303,6 +328,7 @@ __device__ void render_single_device(
               if ((child_mask & child_bit) == 0u) {
                 continue;
               }
+              add_stat_device(stats != nullptr ? &stats->child_candidates_tested : nullptr);
 
               const AabbDevice child = child_bounds_device(entry.bounds, child_index);
               float t_near = 0.0f;
@@ -336,7 +362,12 @@ __device__ void render_single_device(
                 break;
               }
               stack[stack_size++] = candidates[index];
+              add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+              max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
             }
+          }
+          if (accum.transmittance <= early_stop_transmittance) {
+            add_stat_device(stats != nullptr ? &stats->early_terminations : nullptr);
           }
         }
       }
@@ -364,6 +395,7 @@ __device__ void render_single_wide_device(
     float far_plane,
     glm::vec3 background_color,
     float early_stop_transmittance,
+    TraversalStats* stats,
     glm::vec3& rgb,
     float& depth,
     float& opacity) noexcept {
@@ -393,11 +425,14 @@ __device__ void render_single_wide_device(
               near_plane,
               far_plane,
               early_stop_transmittance,
+              stats,
               accum);
         } else {
           StackEntryDevice stack[kMaxWideStackEntries];
           int stack_size = 0;
           stack[stack_size++] = StackEntryDevice{false, 0u, -1, max_depth, root_bounds, root_t_near, root_t_far};
+          add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+          max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
 
           while (stack_size > 0 && accum.transmittance > early_stop_transmittance) {
             const StackEntryDevice entry = stack[--stack_size];
@@ -412,12 +447,15 @@ __device__ void render_single_wide_device(
                   near_plane,
                   far_plane,
                   early_stop_transmittance,
+                  stats,
                   accum);
               continue;
             }
             if (entry.node_index >= num_nodes || entry.depth_remaining <= 0) {
               continue;
             }
+            add_stat_device(stats != nullptr ? &stats->nodes_visited : nullptr);
+            add_stat_device(stats != nullptr ? &stats->stack_pops : nullptr);
 
             const WideNodeDescriptor descriptor = nodes[entry.node_index];
             const std::uint64_t child_mask = descriptor.child_mask();
@@ -429,6 +467,7 @@ __device__ void render_single_wide_device(
             for (std::uint64_t active_mask = child_mask; active_mask != 0u; active_mask &= active_mask - 1ull) {
               const int child_index = __ffsll(static_cast<unsigned long long>(active_mask)) - 1;
               const std::uint64_t child_bit = 1ull << child_index;
+              add_stat_device(stats != nullptr ? &stats->child_candidates_tested : nullptr);
 
               const AabbDevice child = wide_child_bounds_device(entry.bounds, child_index);
               float t_near = 0.0f;
@@ -462,7 +501,12 @@ __device__ void render_single_wide_device(
                 break;
               }
               stack[stack_size++] = candidates[index];
+              add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+              max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
             }
+          }
+          if (accum.transmittance <= early_stop_transmittance) {
+            add_stat_device(stats != nullptr ? &stats->early_terminations : nullptr);
           }
         }
       }
@@ -498,7 +542,8 @@ __device__ bool append_render_segment_device(
     float far_plane,
     RenderSegmentDevice* segments,
     int& segment_count,
-    float& transmittance) noexcept {
+    float& transmittance,
+    TraversalStats* stats) noexcept {
   if (segment.leaf_id < 0 || static_cast<std::size_t>(segment.leaf_id) >= num_leaves) {
     return true;
   }
@@ -508,6 +553,7 @@ __device__ bool append_render_segment_device(
   if (t1 <= t0) {
     return true;
   }
+  add_stat_device(stats != nullptr ? &stats->leaf_segments : nullptr);
 
   const std::uint32_t payload_index = leaf_payload_indices[static_cast<std::size_t>(segment.leaf_id)];
   if (static_cast<std::size_t>(payload_index) >= payload_rows) {
@@ -555,7 +601,8 @@ __device__ bool collect_render_segments_device(
     float far_plane,
     float early_stop_transmittance,
     RenderSegmentDevice* segments,
-    int& segment_count) noexcept {
+    int& segment_count,
+    TraversalStats* stats) noexcept {
   segment_count = 0;
   if (num_nodes == 0 || !finite_vec3_device(origin)) {
     return true;
@@ -593,12 +640,15 @@ __device__ bool collect_render_segments_device(
         far_plane,
         segments,
         segment_count,
-        transmittance);
+        transmittance,
+        stats);
   }
 
   StackEntryDevice stack[kMaxStackEntries];
   int stack_size = 0;
   stack[stack_size++] = StackEntryDevice{false, 0u, -1, max_depth, root_bounds, root_t_near, root_t_far};
+  add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+  max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
 
   while (stack_size > 0 && transmittance > early_stop_transmittance) {
     const StackEntryDevice entry = stack[--stack_size];
@@ -614,7 +664,8 @@ __device__ bool collect_render_segments_device(
               far_plane,
               segments,
               segment_count,
-              transmittance)) {
+              transmittance,
+              stats)) {
         return false;
       }
       continue;
@@ -622,6 +673,8 @@ __device__ bool collect_render_segments_device(
     if (entry.node_index >= num_nodes || entry.depth_remaining <= 0) {
       continue;
     }
+    add_stat_device(stats != nullptr ? &stats->nodes_visited : nullptr);
+    add_stat_device(stats != nullptr ? &stats->stack_pops : nullptr);
 
     const NodeDescriptor descriptor = nodes[entry.node_index];
     const std::uint8_t child_mask = descriptor.child_mask();
@@ -635,6 +688,7 @@ __device__ bool collect_render_segments_device(
       if ((child_mask & child_bit) == 0u) {
         continue;
       }
+      add_stat_device(stats != nullptr ? &stats->child_candidates_tested : nullptr);
 
       const AabbDevice child = child_bounds_device(entry.bounds, child_index);
       float t_near = 0.0f;
@@ -667,7 +721,12 @@ __device__ bool collect_render_segments_device(
         return false;
       }
       stack[stack_size++] = candidates[index];
+      add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+      max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
     }
+  }
+  if (transmittance <= early_stop_transmittance) {
+    add_stat_device(stats != nullptr ? &stats->early_terminations : nullptr);
   }
 
   return true;
@@ -689,7 +748,8 @@ __device__ bool collect_render_segments_wide_device(
     float far_plane,
     float early_stop_transmittance,
     RenderSegmentDevice* segments,
-    int& segment_count) noexcept {
+    int& segment_count,
+    TraversalStats* stats) noexcept {
   segment_count = 0;
   if (num_nodes == 0 || !finite_vec3_device(origin)) {
     return true;
@@ -727,12 +787,15 @@ __device__ bool collect_render_segments_wide_device(
         far_plane,
         segments,
         segment_count,
-        transmittance);
+        transmittance,
+        stats);
   }
 
   StackEntryDevice stack[kMaxWideStackEntries];
   int stack_size = 0;
   stack[stack_size++] = StackEntryDevice{false, 0u, -1, max_depth, root_bounds, root_t_near, root_t_far};
+  add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+  max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
 
   while (stack_size > 0 && transmittance > early_stop_transmittance) {
     const StackEntryDevice entry = stack[--stack_size];
@@ -748,7 +811,8 @@ __device__ bool collect_render_segments_wide_device(
               far_plane,
               segments,
               segment_count,
-              transmittance)) {
+              transmittance,
+              stats)) {
         return false;
       }
       continue;
@@ -756,6 +820,8 @@ __device__ bool collect_render_segments_wide_device(
     if (entry.node_index >= num_nodes || entry.depth_remaining <= 0) {
       continue;
     }
+    add_stat_device(stats != nullptr ? &stats->nodes_visited : nullptr);
+    add_stat_device(stats != nullptr ? &stats->stack_pops : nullptr);
 
     const WideNodeDescriptor descriptor = nodes[entry.node_index];
     const std::uint64_t child_mask = descriptor.child_mask();
@@ -767,6 +833,7 @@ __device__ bool collect_render_segments_wide_device(
     for (std::uint64_t active_mask = child_mask; active_mask != 0u; active_mask &= active_mask - 1ull) {
       const int child_index = __ffsll(static_cast<unsigned long long>(active_mask)) - 1;
       const std::uint64_t child_bit = 1ull << child_index;
+      add_stat_device(stats != nullptr ? &stats->child_candidates_tested : nullptr);
 
       const AabbDevice child = wide_child_bounds_device(entry.bounds, child_index);
       float t_near = 0.0f;
@@ -799,7 +866,12 @@ __device__ bool collect_render_segments_wide_device(
         return false;
       }
       stack[stack_size++] = candidates[index];
+      add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+      max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
     }
+  }
+  if (transmittance <= early_stop_transmittance) {
+    add_stat_device(stats != nullptr ? &stats->early_terminations : nullptr);
   }
 
   return true;
@@ -827,6 +899,7 @@ __global__ void render_volume_backward_kernel(
     float far_plane,
     glm::vec3 background_color,
     float early_stop_transmittance,
+    TraversalStats* stats,
     int* overflow_count) {
   const std::size_t ray_index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
       static_cast<std::size_t>(threadIdx.x);
@@ -852,7 +925,8 @@ __global__ void render_volume_backward_kernel(
       far_plane,
       early_stop_transmittance,
       segments,
-      segment_count);
+      segment_count,
+      stats);
   if (!collected) {
     atomicAdd(overflow_count, 1);
     return;
@@ -908,7 +982,8 @@ __global__ void render_volume_kernel(
     float near_plane,
     float far_plane,
     glm::vec3 background_color,
-    float early_stop_transmittance) {
+    float early_stop_transmittance,
+    TraversalStats* stats) {
   const std::size_t index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
       static_cast<std::size_t>(threadIdx.x);
   if (index >= count) {
@@ -931,6 +1006,7 @@ __global__ void render_volume_kernel(
       far_plane,
       background_color,
       early_stop_transmittance,
+      stats,
       rgb[index],
       depth[index],
       opacity[index]);
@@ -956,7 +1032,8 @@ __global__ void render_volume_wide_kernel(
     float near_plane,
     float far_plane,
     glm::vec3 background_color,
-    float early_stop_transmittance) {
+    float early_stop_transmittance,
+    TraversalStats* stats) {
   const std::size_t index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
       static_cast<std::size_t>(threadIdx.x);
   if (index >= count) {
@@ -979,6 +1056,7 @@ __global__ void render_volume_wide_kernel(
       far_plane,
       background_color,
       early_stop_transmittance,
+      stats,
       rgb[index],
       depth[index],
       opacity[index]);
@@ -1006,6 +1084,7 @@ __global__ void render_volume_backward_wide_kernel(
     float far_plane,
     glm::vec3 background_color,
     float early_stop_transmittance,
+    TraversalStats* stats,
     int* overflow_count) {
   const std::size_t ray_index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
       static_cast<std::size_t>(threadIdx.x);
@@ -1031,7 +1110,8 @@ __global__ void render_volume_backward_wide_kernel(
       far_plane,
       early_stop_transmittance,
       segments,
-      segment_count);
+      segment_count,
+      stats);
   if (!collected) {
     atomicAdd(overflow_count, 1);
     return;
@@ -1168,7 +1248,8 @@ void render_volume_cuda(
       options.near_plane,
       options.far_plane,
       options.background_color,
-      options.early_stop_transmittance);
+      options.early_stop_transmittance,
+      options.stats);
 
   check_cuda_launch(cudaGetLastError(), "render_volume_kernel launch");
 }
@@ -1236,7 +1317,8 @@ void render_volume_wide_cuda(
       options.near_plane,
       options.far_plane,
       options.background_color,
-      options.early_stop_transmittance);
+      options.early_stop_transmittance,
+      options.stats);
 
   check_cuda_launch(cudaGetLastError(), "render_volume_wide_kernel launch");
 }
@@ -1312,6 +1394,7 @@ void render_volume_backward_cuda(
       options.far_plane,
       options.background_color,
       options.early_stop_transmittance,
+      options.stats,
       device_overflow_count);
 
   check_cuda_launch(cudaGetLastError(), "render_volume_backward_kernel launch");
@@ -1397,6 +1480,7 @@ void render_volume_backward_wide_cuda(
       options.far_plane,
       options.background_color,
       options.early_stop_transmittance,
+      options.stats,
       device_overflow_count);
 
   check_cuda_launch(cudaGetLastError(), "render_volume_backward_wide_kernel launch");

@@ -1,268 +1,226 @@
-#include <svo/Builder.hpp>
-#include <svo/DeviceBuffer.hpp>
+#include "benchmark_common.hpp"
+
 #include <svo/Raycast.hpp>
 
-#include <cuda_runtime_api.h>
-#include <glm/geometric.hpp>
-
-#include <chrono>
 #include <cstdint>
 #include <iostream>
-#include <random>
 #include <stdexcept>
-#include <string>
-#include <tuple>
+#include <string_view>
 #include <vector>
 
 namespace {
 
-void check_cuda(cudaError_t result, const char* operation) {
-  if (result != cudaSuccess) {
-    throw std::runtime_error(std::string(operation) + " failed: " + cudaGetErrorString(result));
-  }
-}
-
-class CudaEvent {
- public:
-  CudaEvent() {
-    check_cuda(cudaEventCreate(&event_), "cudaEventCreate");
-  }
-
-  ~CudaEvent() {
-    if (event_ != nullptr) {
-      (void)cudaEventDestroy(event_);
-    }
-  }
-
-  CudaEvent(const CudaEvent&) = delete;
-  CudaEvent& operator=(const CudaEvent&) = delete;
-
-  cudaEvent_t get() const noexcept { return event_; }
-
- private:
-  cudaEvent_t event_ = nullptr;
+struct RaycastRun {
+  svo_bench::TimingMetrics metrics;
+  svo::TraversalStats stats;
+  std::size_t hits = 0;
 };
 
-class CudaStream {
- public:
-  CudaStream() {
-    check_cuda(cudaStreamCreate(&stream_), "cudaStreamCreate");
-  }
+RaycastRun run_octree8(
+    const svo::Octree& tree,
+    const std::vector<glm::vec3>& origins,
+    const std::vector<glm::vec3>& directions,
+    cudaStream_t stream,
+    const svo_bench::BenchmarkConfig& config) {
+  RaycastRun run;
+  svo::RaycastOptions cpu_options;
+  svo::TraversalStats cpu_stats;
+  cpu_options.stats = config.profile ? &cpu_stats : nullptr;
+  svo::RaycastBatch cpu_results;
+  run.metrics.cpu_ms = svo_bench::time_wall_ms([&]() {
+    cpu_results = svo::raycast_cpu(tree, origins, directions, cpu_options);
+  });
 
-  ~CudaStream() {
-    if (stream_ != nullptr) {
-      (void)cudaStreamDestroy(stream_);
+  svo::DeviceBuffer<svo::NodeDescriptor> device_nodes(tree.nodes().size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::uint32_t> device_payload_indices(tree.leaf_payload_indices().size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_origins(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_directions(directions.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::uint8_t> device_hit_mask(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::int32_t> device_leaf_ids(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_t(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_positions(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::int32_t> device_depths(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<svo::TraversalStats> device_stats(1, svo::Device::CUDA);
+  svo::TraversalStats zero_stats{};
+  std::vector<std::uint8_t> hit_mask(origins.size());
+
+  run.metrics.h2d_ms = svo_bench::time_cuda_ms(stream, [&]() {
+    device_nodes.copy_from_host(tree.nodes().data(), tree.nodes().size(), stream);
+    device_payload_indices.copy_from_host(tree.leaf_payload_indices().data(), tree.leaf_payload_indices().size(), stream);
+    device_origins.copy_from_host(origins.data(), origins.size(), stream);
+    device_directions.copy_from_host(directions.data(), directions.size(), stream);
+    device_stats.copy_from_host(&zero_stats, 1, stream);
+  });
+
+  svo::RaycastOptions options;
+  options.stats = config.profile ? device_stats.data() : nullptr;
+  auto launch = [&]() {
+    svo::raycast_cuda(
+        device_nodes.data(),
+        device_nodes.size(),
+        device_payload_indices.data(),
+        device_payload_indices.size(),
+        tree.max_depth(),
+        tree.root_bounds(),
+        device_origins.data(),
+        device_directions.data(),
+        device_hit_mask.data(),
+        device_leaf_ids.data(),
+        device_t.data(),
+        device_positions.data(),
+        device_depths.data(),
+        origins.size(),
+        options,
+        stream);
+  };
+  launch();
+  svo_bench::check(cudaStreamSynchronize(stream), "cudaStreamSynchronize raycast warmup");
+  run.metrics.kernel_ms = svo_bench::time_cuda_ms(stream, [&]() {
+    for (int iteration = 0; iteration < config.iterations; ++iteration) {
+      launch();
     }
+  }) / static_cast<double>(config.iterations);
+
+  run.metrics.d2h_ms = svo_bench::time_cuda_ms(stream, [&]() {
+    device_hit_mask.copy_to_host(hit_mask.data(), hit_mask.size(), stream);
+    if (config.profile) {
+      device_stats.copy_to_host(&run.stats, 1, stream);
+    }
+  });
+  run.metrics.total_wall_ms = run.metrics.h2d_ms + run.metrics.kernel_ms + run.metrics.d2h_ms;
+  if (hit_mask != cpu_results.hit_mask) {
+    throw std::runtime_error("octree8 CUDA hit mask does not match CPU reference");
   }
-
-  CudaStream(const CudaStream&) = delete;
-  CudaStream& operator=(const CudaStream&) = delete;
-
-  cudaStream_t get() const noexcept { return stream_; }
-
- private:
-  cudaStream_t stream_ = nullptr;
-};
-
-float elapsed_ms(cudaEvent_t start, cudaEvent_t stop) {
-  float milliseconds = 0.0f;
-  check_cuda(cudaEventElapsedTime(&milliseconds, start, stop), "cudaEventElapsedTime");
-  return milliseconds;
+  for (std::uint8_t value : hit_mask) {
+    run.hits += value != 0u ? 1u : 0u;
+  }
+  return run;
 }
 
-std::vector<glm::ivec3> make_sparse_scene(int max_depth) {
-  const int grid_size = 1 << max_depth;
-  std::mt19937 rng(20260709u);
-  std::bernoulli_distribution keep_dist(0.035);
+RaycastRun run_wide4(
+    const svo::Octree& tree,
+    const std::vector<glm::vec3>& origins,
+    const std::vector<glm::vec3>& directions,
+    cudaStream_t stream,
+    const svo_bench::BenchmarkConfig& config) {
+  RaycastRun run;
+  svo::RaycastOptions cpu_options;
+  svo::TraversalStats cpu_stats;
+  cpu_options.stats = config.profile ? &cpu_stats : nullptr;
+  svo::RaycastBatch cpu_results;
+  run.metrics.cpu_ms = svo_bench::time_wall_ms([&]() {
+    cpu_results = svo::raycast_cpu(tree, origins, directions, cpu_options);
+  });
 
-  std::vector<glm::ivec3> coordinates;
-  for (int z = 0; z < grid_size; ++z) {
-    for (int y = 0; y < grid_size; ++y) {
-      for (int x = 0; x < grid_size; ++x) {
-        const bool in_box = x >= grid_size / 4 && x < (3 * grid_size) / 4 && y >= grid_size / 4 &&
-            y < (3 * grid_size) / 4 && z >= grid_size / 4 && z < (3 * grid_size) / 4;
-        if (in_box && keep_dist(rng)) {
-          coordinates.emplace_back(x, y, z);
-        }
-      }
+  svo::DeviceBuffer<svo::WideNodeDescriptor> device_nodes(tree.wide_nodes().size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::uint32_t> device_payload_indices(tree.leaf_payload_indices().size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_origins(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_directions(directions.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::uint8_t> device_hit_mask(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::int32_t> device_leaf_ids(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_t(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_positions(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::int32_t> device_depths(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<svo::TraversalStats> device_stats(1, svo::Device::CUDA);
+  svo::TraversalStats zero_stats{};
+  std::vector<std::uint8_t> hit_mask(origins.size());
+
+  run.metrics.h2d_ms = svo_bench::time_cuda_ms(stream, [&]() {
+    device_nodes.copy_from_host(tree.wide_nodes().data(), tree.wide_nodes().size(), stream);
+    device_payload_indices.copy_from_host(tree.leaf_payload_indices().data(), tree.leaf_payload_indices().size(), stream);
+    device_origins.copy_from_host(origins.data(), origins.size(), stream);
+    device_directions.copy_from_host(directions.data(), directions.size(), stream);
+    device_stats.copy_from_host(&zero_stats, 1, stream);
+  });
+
+  svo::RaycastOptions options;
+  options.stats = config.profile ? device_stats.data() : nullptr;
+  auto launch = [&]() {
+    svo::raycast_wide_cuda(
+        device_nodes.data(),
+        device_nodes.size(),
+        device_payload_indices.data(),
+        device_payload_indices.size(),
+        tree.max_depth(),
+        tree.root_bounds(),
+        device_origins.data(),
+        device_directions.data(),
+        device_hit_mask.data(),
+        device_leaf_ids.data(),
+        device_t.data(),
+        device_positions.data(),
+        device_depths.data(),
+        origins.size(),
+        options,
+        stream);
+  };
+  launch();
+  svo_bench::check(cudaStreamSynchronize(stream), "cudaStreamSynchronize raycast wide warmup");
+  run.metrics.kernel_ms = svo_bench::time_cuda_ms(stream, [&]() {
+    for (int iteration = 0; iteration < config.iterations; ++iteration) {
+      launch();
     }
+  }) / static_cast<double>(config.iterations);
+
+  run.metrics.d2h_ms = svo_bench::time_cuda_ms(stream, [&]() {
+    device_hit_mask.copy_to_host(hit_mask.data(), hit_mask.size(), stream);
+    if (config.profile) {
+      device_stats.copy_to_host(&run.stats, 1, stream);
+    }
+  });
+  run.metrics.total_wall_ms = run.metrics.h2d_ms + run.metrics.kernel_ms + run.metrics.d2h_ms;
+  if (hit_mask != cpu_results.hit_mask) {
+    throw std::runtime_error("wide4 CUDA hit mask does not match CPU reference");
   }
-  return coordinates;
+  for (std::uint8_t value : hit_mask) {
+    run.hits += value != 0u ? 1u : 0u;
+  }
+  return run;
 }
 
-void make_rays(std::size_t count, std::vector<glm::vec3>& origins, std::vector<glm::vec3>& directions) {
-  std::mt19937 rng(20260710u);
-  std::uniform_real_distribution<float> uv_dist(0.05f, 0.95f);
-  std::uniform_real_distribution<float> jitter_dist(-0.15f, 0.15f);
-
-  origins.clear();
-  directions.clear();
-  origins.reserve(count);
-  directions.reserve(count);
-  for (std::size_t index = 0; index < count; ++index) {
-    const float y = uv_dist(rng);
-    const float z = uv_dist(rng);
-    origins.push_back({-0.25f, y, z});
-    directions.push_back({1.0f, jitter_dist(rng), jitter_dist(rng)});
+void print_result(
+    const svo_bench::BenchmarkConfig& config,
+    const svo::Octree& tree,
+    const RaycastRun& run,
+    std::string_view branching) {
+  const double rays_per_second = (static_cast<double>(config.count) / run.metrics.kernel_ms) * 1000.0;
+  std::cout << "raycast " << branching << '\n';
+  std::cout << "  max_depth: " << tree.max_depth() << '\n';
+  std::cout << "  nodes: " << svo_bench::total_nodes(tree) << '\n';
+  std::cout << "  leaves: " << tree.num_leaves() << '\n';
+  std::cout << "  rays: " << config.count << '\n';
+  std::cout << "  hits: " << run.hits << '\n';
+  std::cout << "  hit_rate: " << static_cast<double>(run.hits) / static_cast<double>(config.count) << '\n';
+  std::cout << "  cpu_reference_wall_ms: " << run.metrics.cpu_ms << '\n';
+  std::cout << "  h2d_ms: " << run.metrics.h2d_ms << '\n';
+  std::cout << "  kernel_ms: " << run.metrics.kernel_ms << '\n';
+  std::cout << "  d2h_ms: " << run.metrics.d2h_ms << '\n';
+  std::cout << "  total_wall_ms: " << run.metrics.total_wall_ms << '\n';
+  std::cout << "  rays_per_second: " << rays_per_second << '\n';
+  if (config.profile) {
+    svo_bench::print_stats(run.stats);
   }
+  svo_bench::append_jsonl(config, tree, "raycast", run.metrics, rays_per_second, run.stats, "rays_per_second");
 }
 
 }  // namespace
 
-int main() {
-  constexpr int kMaxDepth = 6;
-  constexpr std::size_t kRayCount = 1u << 20u;
-  constexpr int kIterations = 20;
-
-  svo::BuildOptions build_options;
-  build_options.max_depth = kMaxDepth;
-  const std::vector<glm::ivec3> coordinates = make_sparse_scene(kMaxDepth);
-  const svo::Octree octree = svo::Octree::from_voxels_cpu(coordinates, build_options);
-  build_options.branching = svo::BranchingMode::Wide4;
-  const svo::Octree wide = svo::Octree::from_voxels_cpu(coordinates, build_options);
-
+int main(int argc, char** argv) {
+  const svo_bench::BenchmarkConfig config = svo_bench::parse_config(argc, argv, 1u << 20u);
+  svo_bench::print_common_header(config, "raycast");
+  const std::vector<glm::ivec3> coordinates = svo_bench::make_scene(config);
   std::vector<glm::vec3> origins;
   std::vector<glm::vec3> directions;
-  make_rays(kRayCount, origins, directions);
+  svo_bench::make_rays(config.count, config.seed, origins, directions);
+  svo_bench::CudaStream stream;
 
-  CudaStream stream;
-
-  auto run_octree8 = [&](const svo::Octree& tree) {
-    CudaEvent transfer_start;
-    CudaEvent transfer_stop;
-    CudaEvent kernel_start;
-    CudaEvent kernel_stop;
-    svo::DeviceBuffer<svo::NodeDescriptor> device_nodes(tree.nodes().size(), svo::Device::CUDA);
-    svo::DeviceBuffer<std::uint32_t> device_leaf_payload_indices(
-        tree.leaf_payload_indices().size(), svo::Device::CUDA);
-    svo::DeviceBuffer<glm::vec3> device_origins(origins.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<glm::vec3> device_directions(directions.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<std::uint8_t> device_hit_mask(origins.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<std::int32_t> device_leaf_ids(origins.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<float> device_t(origins.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<glm::vec3> device_positions(origins.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<std::int32_t> device_depths(origins.size(), svo::Device::CUDA);
-
-    check_cuda(cudaEventRecord(transfer_start.get(), stream.get()), "cudaEventRecord transfer_start");
-    device_nodes.copy_from_host(tree.nodes().data(), tree.nodes().size(), stream.get());
-    device_leaf_payload_indices.copy_from_host(
-        tree.leaf_payload_indices().data(), tree.leaf_payload_indices().size(), stream.get());
-    device_origins.copy_from_host(origins.data(), origins.size(), stream.get());
-    device_directions.copy_from_host(directions.data(), directions.size(), stream.get());
-    check_cuda(cudaEventRecord(transfer_stop.get(), stream.get()), "cudaEventRecord transfer_stop");
-    check_cuda(cudaEventSynchronize(transfer_stop.get()), "cudaEventSynchronize transfer_stop");
-
-    auto launch = [&]() {
-      svo::raycast_cuda(
-          device_nodes.data(),
-          device_nodes.size(),
-          device_leaf_payload_indices.data(),
-          device_leaf_payload_indices.size(),
-          tree.max_depth(),
-          tree.root_bounds(),
-          device_origins.data(),
-          device_directions.data(),
-          device_hit_mask.data(),
-          device_leaf_ids.data(),
-          device_t.data(),
-          device_positions.data(),
-          device_depths.data(),
-          origins.size(),
-          {},
-          stream.get());
-    };
-    launch();
-    check_cuda(cudaStreamSynchronize(stream.get()), "cudaStreamSynchronize warmup");
-    check_cuda(cudaEventRecord(kernel_start.get(), stream.get()), "cudaEventRecord kernel_start");
-    for (int iteration = 0; iteration < kIterations; ++iteration) {
-      launch();
-    }
-    check_cuda(cudaEventRecord(kernel_stop.get(), stream.get()), "cudaEventRecord kernel_stop");
-    check_cuda(cudaEventSynchronize(kernel_stop.get()), "cudaEventSynchronize kernel_stop");
-    return std::tuple{device_hit_mask.to_host(stream.get()), elapsed_ms(transfer_start.get(), transfer_stop.get()),
-                      elapsed_ms(kernel_start.get(), kernel_stop.get()) / static_cast<float>(kIterations)};
-  };
-
-  auto run_wide4 = [&](const svo::Octree& tree) {
-    CudaEvent transfer_start;
-    CudaEvent transfer_stop;
-    CudaEvent kernel_start;
-    CudaEvent kernel_stop;
-    svo::DeviceBuffer<svo::WideNodeDescriptor> device_nodes(tree.wide_nodes().size(), svo::Device::CUDA);
-    svo::DeviceBuffer<std::uint32_t> device_leaf_payload_indices(
-        tree.leaf_payload_indices().size(), svo::Device::CUDA);
-    svo::DeviceBuffer<glm::vec3> device_origins(origins.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<glm::vec3> device_directions(directions.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<std::uint8_t> device_hit_mask(origins.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<std::int32_t> device_leaf_ids(origins.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<float> device_t(origins.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<glm::vec3> device_positions(origins.size(), svo::Device::CUDA);
-    svo::DeviceBuffer<std::int32_t> device_depths(origins.size(), svo::Device::CUDA);
-
-    check_cuda(cudaEventRecord(transfer_start.get(), stream.get()), "cudaEventRecord transfer_start");
-    device_nodes.copy_from_host(tree.wide_nodes().data(), tree.wide_nodes().size(), stream.get());
-    device_leaf_payload_indices.copy_from_host(
-        tree.leaf_payload_indices().data(), tree.leaf_payload_indices().size(), stream.get());
-    device_origins.copy_from_host(origins.data(), origins.size(), stream.get());
-    device_directions.copy_from_host(directions.data(), directions.size(), stream.get());
-    check_cuda(cudaEventRecord(transfer_stop.get(), stream.get()), "cudaEventRecord transfer_stop");
-    check_cuda(cudaEventSynchronize(transfer_stop.get()), "cudaEventSynchronize transfer_stop");
-
-    auto launch = [&]() {
-      svo::raycast_wide_cuda(
-          device_nodes.data(),
-          device_nodes.size(),
-          device_leaf_payload_indices.data(),
-          device_leaf_payload_indices.size(),
-          tree.max_depth(),
-          tree.root_bounds(),
-          device_origins.data(),
-          device_directions.data(),
-          device_hit_mask.data(),
-          device_leaf_ids.data(),
-          device_t.data(),
-          device_positions.data(),
-          device_depths.data(),
-          origins.size(),
-          {},
-          stream.get());
-    };
-    launch();
-    check_cuda(cudaStreamSynchronize(stream.get()), "cudaStreamSynchronize warmup");
-    check_cuda(cudaEventRecord(kernel_start.get(), stream.get()), "cudaEventRecord kernel_start");
-    for (int iteration = 0; iteration < kIterations; ++iteration) {
-      launch();
-    }
-    check_cuda(cudaEventRecord(kernel_stop.get(), stream.get()), "cudaEventRecord kernel_stop");
-    check_cuda(cudaEventSynchronize(kernel_stop.get()), "cudaEventSynchronize kernel_stop");
-    return std::tuple{device_hit_mask.to_host(stream.get()), elapsed_ms(transfer_start.get(), transfer_stop.get()),
-                      elapsed_ms(kernel_start.get(), kernel_stop.get()) / static_cast<float>(kIterations)};
-  };
-
-  auto print_metrics = [&](const char* topology, const svo::Octree& tree, const std::vector<std::uint8_t>& hit_mask,
-                           float transfer_ms_value, float kernel_ms) {
-    check_cuda(cudaStreamSynchronize(stream.get()), "cudaStreamSynchronize hit copy");
-    std::size_t hits = 0;
-    for (std::uint8_t value : hit_mask) {
-      hits += value != 0u ? 1u : 0u;
-    }
-    const double rays_per_second =
-        (static_cast<double>(origins.size()) / static_cast<double>(kernel_ms)) * 1000.0;
-    std::cout << "raycast benchmark " << topology << '\n';
-    std::cout << "  max_depth: " << kMaxDepth << '\n';
-    std::cout << "  nodes: " << tree.num_nodes() << '\n';
-    std::cout << "  leaves: " << tree.num_leaves() << '\n';
-    std::cout << "  rays: " << origins.size() << '\n';
-    std::cout << "  hit_rate: " << (static_cast<double>(hits) / static_cast<double>(origins.size())) << '\n';
-    std::cout << "  transfer_ms: " << transfer_ms_value << '\n';
-    std::cout << "  kernel_ms: " << kernel_ms << '\n';
-    std::cout << "  rays_per_second: " << rays_per_second << '\n';
-  };
-
-  const auto [octree_hit_mask, octree_transfer_ms, octree_kernel_ms] = run_octree8(octree);
-  print_metrics("octree8", octree, octree_hit_mask, octree_transfer_ms, octree_kernel_ms);
-  const auto [wide_hit_mask, wide_transfer_ms, wide_kernel_ms] = run_wide4(wide);
-  print_metrics("wide4", wide, wide_hit_mask, wide_transfer_ms, wide_kernel_ms);
-
+  if (config.branching == "octree8" || config.branching == "both") {
+    const svo::Octree tree = svo_bench::build_tree(coordinates, config, "octree8");
+    print_result(config, tree, run_octree8(tree, origins, directions, stream.get(), config), "octree8");
+  }
+  if (config.branching == "wide4" || config.branching == "both") {
+    const svo::Octree tree = svo_bench::build_tree(coordinates, config, "wide4");
+    print_result(config, tree, run_wide4(tree, origins, directions, stream.get(), config), "wide4");
+  }
   return 0;
 }

@@ -254,7 +254,7 @@ Goal: add safe CPU/GPU memory management.
 - [ ] Python bindings release the GIL around long-running C++/CUDA work (manual check: review pybind wrappers for `py::gil_scoped_release` around blocking or launch-heavy calls).
 - [ ] Tensor/array inputs validate dtype, shape, contiguity, device, and lifetime before launching kernels.
 - [ ] GPU outputs have deterministic ownership semantics and do not expose dangling views (manual check: review returned tensor/array ownership and lifetime relationships).
-- [ ] Benchmarks cover transfer latency separately from kernel latency.
+- [x] Benchmarks cover transfer latency separately from kernel latency.
 - [x] Tests include asynchronous copy behavior and stream ordering.
 - [x] Tests include CUDA-disabled misuse errors.
 - [ ] Tests include mixed CPU/GPU misuse errors once APIs expose meaningful mixed-device operations.
@@ -911,21 +911,25 @@ change public semantics, topology layout, or differentiability behavior.
 
 ### Profiling and Benchmarks
 
-- [ ] Add reproducible C++/Python benchmark entry points for point query, raycast, forward render, backward render, and realtime-viewer-style rendering.
-- [ ] Report GPU kernel time separately from allocation, Python overhead, and CPU-GPU transfer time.
-- [ ] Add optional CPU/CUDA profiling counters for traversal and rendering, disabled by default.
-- [ ] Count nodes visited per ray/query.
-- [ ] Count child candidates tested per ray.
-- [ ] Count leaf segments/samples composited per ray.
-- [ ] Count early opacity termination events.
-- [ ] Count stack pushes/pops and maximum stack depth.
-- [ ] Expose aggregated profiling output in C++ benchmarks.
-- [ ] Expose optional profiling output in Python for debug/viewer use.
-- [ ] Keep profiling compile/runtime gated so hot kernels do not pay overhead in normal rendering.
+- [x] Add reproducible C++/Python benchmark entry points for point query, raycast, forward render, backward render, and realtime-viewer-style rendering.
+- [x] Report GPU kernel time separately from allocation, Python overhead, and CPU-GPU transfer time.
+- [x] Add optional CPU/CUDA profiling counters for traversal and rendering, disabled by default.
+- [x] Count nodes visited per ray/query.
+- [x] Count child candidates tested per ray.
+- [x] Count leaf segments/samples composited per ray.
+- [x] Count early opacity termination events.
+- [x] Count stack pushes/pops and maximum stack depth.
+- [x] Expose aggregated profiling output in C++ benchmarks.
+- [x] Expose optional profiling output in Python for debug/viewer use.
+- [x] Keep profiling runtime-gated so atomics/counter writes are disabled unless a stats pointer is provided.
+- [ ] Add a compile-time `SVO_ENABLE_TRAVERSAL_STATS` option to compile out stats instrumentation for lean release/performance builds.
+  - Prefer preserving public option fields and treating stats pointers as ignored when disabled, unless an API/ABI decision says otherwise.
+  - Make benchmark `--profile` report clearly when traversal stats were compiled out.
+  - Validate both enabled and disabled builds so stats code does not become an always-on maintenance tax.
 
 ### Low-Risk Optimizations
 
-- [ ] Add explicit destructive/reuse allocation APIs for `DeviceBuffer`.
+- [x] Add explicit destructive/reuse allocation APIs for `DeviceBuffer`.
   - Consider `reset`, `release_and_allocate`, or reusable capacity-style APIs for hot paths where double allocation is too expensive.
   - Keep the current `allocate` strong-guarantee behavior as the safe default.
   - Document whether destructive allocation preserves old contents, old capacity, stream ordering, and failure state.
@@ -947,8 +951,8 @@ change public semantics, topology layout, or differentiability behavior.
 
 ### Acceptance criteria
 
-- [ ] Benchmarks are reproducible from documented commands.
-- [ ] Benchmark output gives enough data to choose the Milestone 19 acceleration target.
+- [x] Benchmarks are reproducible from documented commands.
+- [x] Benchmark output gives enough data to choose the Milestone 19 acceleration target.
 - [ ] Existing CPU, CUDA, and Torch rendering tests still pass.
 - [ ] Performance changes are documented with before/after numbers.
 - [ ] Any optimization that is scene-dependent is labeled as such.

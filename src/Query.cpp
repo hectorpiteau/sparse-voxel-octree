@@ -65,6 +65,10 @@ glm::ivec3 point_to_voxel_coord(const Octree& octree, const glm::vec3& point) no
       static_cast<int>(std::floor(normalized.z * scale))};
 }
 
+void add_stat(std::uint64_t& field, std::uint64_t value = 1) noexcept {
+  field += value;
+}
+
 std::int32_t query_single_point(
     const Octree& octree,
     const glm::vec3& point,
@@ -87,6 +91,10 @@ std::int32_t query_single_point(
   int depth_remaining = octree.max_depth();
 
   while (true) {
+    if (options.stats != nullptr) {
+      add_stat(options.stats->nodes_visited);
+      add_stat(options.stats->child_candidates_tested);
+    }
     const NodeDescriptor descriptor = octree.nodes()[node_index];
     const int child_index = child_index_for_depth(voxel, depth_remaining - 1);
     const std::uint8_t child_bit = static_cast<std::uint8_t>(1u << child_index);
@@ -142,6 +150,10 @@ std::int32_t query_single_point_wide(
       return -1;
     }
 
+    if (options.stats != nullptr) {
+      add_stat(options.stats->nodes_visited);
+      add_stat(options.stats->child_candidates_tested);
+    }
     const WideNodeDescriptor descriptor = octree.wide_nodes()[node_index];
     const int child_index = wide_child_index_for_depth(voxel, depth_remaining - 2);
     const std::uint64_t child_bit = 1ull << child_index;

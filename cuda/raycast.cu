@@ -56,6 +56,22 @@ __device__ int count_bits_device(std::uint64_t value) noexcept {
   return __popcll(static_cast<unsigned long long>(value));
 }
 
+__device__ void add_stat_device(std::uint64_t* field, std::uint64_t value = 1u) noexcept {
+  if (field != nullptr) {
+    atomicAdd(
+        reinterpret_cast<unsigned long long*>(field),
+        static_cast<unsigned long long>(value));
+  }
+}
+
+__device__ void max_stat_device(std::uint64_t* field, std::uint64_t value) noexcept {
+  if (field != nullptr) {
+    atomicMax(
+        reinterpret_cast<unsigned long long*>(field),
+        static_cast<unsigned long long>(value));
+  }
+}
+
 __device__ int prefix_rank_device(std::uint8_t mask, int child_index) noexcept {
   if (child_index <= 0) {
     return 0;
@@ -203,6 +219,7 @@ __device__ void consider_leaf_device(
     std::int32_t leaf_id,
     std::int32_t depth,
     bool return_payload_indices,
+    TraversalStats* stats,
     HitCandidateDevice& best) noexcept {
   if (leaf_id < 0 || static_cast<std::size_t>(leaf_id) >= num_leaves) {
     return;
@@ -213,6 +230,7 @@ __device__ void consider_leaf_device(
   if (!intersect_aabb_device(bounds, origin, direction, t_near, t_far)) {
     return;
   }
+  add_stat_device(stats != nullptr ? &stats->leaf_segments : nullptr);
 
   HitCandidateDevice candidate;
   candidate.hit = true;
@@ -237,7 +255,8 @@ __device__ HitCandidateDevice raycast_single_device(
     const AabbDevice& root_bounds,
     const glm::vec3& origin,
     const glm::vec3& direction,
-    bool return_payload_indices) noexcept {
+    bool return_payload_indices,
+    TraversalStats* stats) noexcept {
   HitCandidateDevice best;
   if (num_nodes == 0 || !finite_vec3_device(origin)) {
     return best;
@@ -265,6 +284,7 @@ __device__ HitCandidateDevice raycast_single_device(
         0,
         0,
         return_payload_indices,
+        stats,
         best);
     return best;
   }
@@ -272,12 +292,16 @@ __device__ HitCandidateDevice raycast_single_device(
   StackEntry stack[kMaxStackEntries];
   int stack_size = 0;
   stack[stack_size++] = StackEntry{0u, max_depth, root_bounds};
+  add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+  max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
 
   while (stack_size > 0) {
     const StackEntry entry = stack[--stack_size];
     if (entry.node_index >= num_nodes || entry.depth_remaining <= 0) {
       continue;
     }
+    add_stat_device(stats != nullptr ? &stats->nodes_visited : nullptr);
+    add_stat_device(stats != nullptr ? &stats->stack_pops : nullptr);
 
     const NodeDescriptor descriptor = nodes[entry.node_index];
     const std::uint8_t child_mask = descriptor.child_mask();
@@ -289,6 +313,7 @@ __device__ HitCandidateDevice raycast_single_device(
       if ((child_mask & child_bit) == 0u) {
         continue;
       }
+      add_stat_device(stats != nullptr ? &stats->child_candidates_tested : nullptr);
 
       const AabbDevice child = child_bounds_device(entry.bounds, child_index);
       float t_near = 0.0f;
@@ -314,6 +339,7 @@ __device__ HitCandidateDevice raycast_single_device(
             leaf_id,
             depth,
             return_payload_indices,
+            stats,
             best);
         continue;
       }
@@ -324,6 +350,8 @@ __device__ HitCandidateDevice raycast_single_device(
         return HitCandidateDevice{};
       }
       stack[stack_size++] = StackEntry{child_node_index, entry.depth_remaining - 1, child};
+      add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+      max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
     }
   }
 
@@ -339,7 +367,8 @@ __device__ HitCandidateDevice raycast_single_wide_device(
     const AabbDevice& root_bounds,
     const glm::vec3& origin,
     const glm::vec3& direction,
-    bool return_payload_indices) noexcept {
+    bool return_payload_indices,
+    TraversalStats* stats) noexcept {
   HitCandidateDevice best;
   if (num_nodes == 0 || !finite_vec3_device(origin)) {
     return best;
@@ -367,6 +396,7 @@ __device__ HitCandidateDevice raycast_single_wide_device(
         0,
         0,
         return_payload_indices,
+        stats,
         best);
     return best;
   }
@@ -374,12 +404,16 @@ __device__ HitCandidateDevice raycast_single_wide_device(
   StackEntry stack[kMaxWideStackEntries];
   int stack_size = 0;
   stack[stack_size++] = StackEntry{0u, max_depth, root_bounds};
+  add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+  max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
 
   while (stack_size > 0) {
     const StackEntry entry = stack[--stack_size];
     if (entry.node_index >= num_nodes || entry.depth_remaining <= 0) {
       continue;
     }
+    add_stat_device(stats != nullptr ? &stats->nodes_visited : nullptr);
+    add_stat_device(stats != nullptr ? &stats->stack_pops : nullptr);
 
     const WideNodeDescriptor descriptor = nodes[entry.node_index];
     const std::uint64_t child_mask = descriptor.child_mask();
@@ -389,6 +423,7 @@ __device__ HitCandidateDevice raycast_single_wide_device(
     for (std::uint64_t active_mask = child_mask; active_mask != 0u; active_mask &= active_mask - 1ull) {
       const int child_index = __ffsll(static_cast<unsigned long long>(active_mask)) - 1;
       const std::uint64_t child_bit = 1ull << child_index;
+      add_stat_device(stats != nullptr ? &stats->child_candidates_tested : nullptr);
 
       const AabbDevice child = wide_child_bounds_device(entry.bounds, child_index);
       float t_near = 0.0f;
@@ -414,6 +449,7 @@ __device__ HitCandidateDevice raycast_single_wide_device(
             leaf_id,
             depth,
             return_payload_indices,
+            stats,
             best);
         continue;
       }
@@ -422,6 +458,8 @@ __device__ HitCandidateDevice raycast_single_wide_device(
           static_cast<std::size_t>(prefix_rank_device(internal_mask, child_index));
       if (stack_size < kMaxWideStackEntries) {
         stack[stack_size++] = StackEntry{child_node_index, entry.depth_remaining - 2, child};
+        add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
+        max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
       }
     }
   }
@@ -445,7 +483,8 @@ __global__ void raycast_kernel(
     glm::vec3* positions,
     std::int32_t* depths,
     std::size_t count,
-    bool return_payload_indices) {
+    bool return_payload_indices,
+    TraversalStats* stats) {
   const std::size_t index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
       static_cast<std::size_t>(threadIdx.x);
   if (index >= count) {
@@ -462,7 +501,8 @@ __global__ void raycast_kernel(
       root_bounds,
       origins[index],
       directions[index],
-      return_payload_indices);
+      return_payload_indices,
+      stats);
 
   if (hit.hit) {
     write_hit_device(hit, hit_mask, leaf_ids, t, positions, depths, index);
@@ -487,7 +527,8 @@ __global__ void raycast_wide_kernel(
     glm::vec3* positions,
     std::int32_t* depths,
     std::size_t count,
-    bool return_payload_indices) {
+    bool return_payload_indices,
+    TraversalStats* stats) {
   const std::size_t index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
       static_cast<std::size_t>(threadIdx.x);
   if (index >= count) {
@@ -503,7 +544,8 @@ __global__ void raycast_wide_kernel(
       AabbDevice{min_bound, max_bound},
       origins[index],
       directions[index],
-      return_payload_indices);
+      return_payload_indices,
+      stats);
 
   if (hit.hit) {
     write_hit_device(hit, hit_mask, leaf_ids, t, positions, depths, index);
@@ -581,7 +623,8 @@ void raycast_cuda(
       positions,
       depths,
       count,
-      options.return_payload_indices);
+      options.return_payload_indices,
+      options.stats);
 
   check_cuda_launch(cudaGetLastError(), "raycast_kernel launch");
 }
@@ -641,7 +684,8 @@ void raycast_wide_cuda(
       positions,
       depths,
       count,
-      options.return_payload_indices);
+      options.return_payload_indices,
+      options.stats);
 
   check_cuda_launch(cudaGetLastError(), "raycast_wide_kernel launch");
 }

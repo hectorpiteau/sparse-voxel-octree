@@ -71,6 +71,21 @@ void test_cpu_allocate_and_copy() {
   require(buffer.to_host() == source, "CPU buffer roundtrip mismatch");
 }
 
+void test_cpu_reuse_discard() {
+  svo::DeviceBuffer<int> buffer;
+  buffer.reserve_discard(8, svo::Device::CPU);
+  require(buffer.empty(), "reserve_discard should leave logical size zero");
+  require(buffer.capacity() >= 8, "reserve_discard should provide requested CPU capacity");
+  require(buffer.device() == svo::Device::CPU, "reserve_discard should set CPU device");
+
+  buffer.resize_discard(4, svo::Device::CPU);
+  require(buffer.size() == 4, "resize_discard should update CPU logical size");
+  require(buffer.capacity() >= 8, "resize_discard should reuse CPU capacity when possible");
+  const std::vector<int> source{9, 8, 7, 6};
+  buffer.copy_from_host(source.data(), source.size());
+  require(buffer.to_host() == source, "resize_discard CPU copy roundtrip mismatch");
+}
+
 void test_move_buffer() {
   const std::vector<std::uint32_t> source{10u, 20u, 30u};
   svo::DeviceBuffer<std::uint32_t> buffer =
@@ -212,6 +227,23 @@ void test_cuda_async_stream_ordering_if_enabled() {
 #endif
 }
 
+void test_cuda_reuse_discard_if_enabled() {
+#if SVO_ENABLE_CUDA
+  svo::DeviceBuffer<int> buffer;
+  buffer.reserve_discard(8, svo::Device::CUDA);
+  require(buffer.empty(), "CUDA reserve_discard should leave logical size zero");
+  require(buffer.capacity() >= 8, "CUDA reserve_discard should provide requested capacity");
+  require(buffer.device() == svo::Device::CUDA, "CUDA reserve_discard should set CUDA device");
+
+  buffer.resize_discard(4, svo::Device::CUDA);
+  require(buffer.size() == 4, "CUDA resize_discard should update logical size");
+  require(buffer.capacity() >= 8, "CUDA resize_discard should reuse capacity when possible");
+  const std::vector<int> source{5, 4, 3, 2};
+  buffer.copy_from_host(source.data(), source.size());
+  require(buffer.to_host() == source, "resize_discard CUDA copy roundtrip mismatch");
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -222,6 +254,7 @@ int main() {
 
   test_zero_size_cpu_buffer();
   test_cpu_allocate_and_copy();
+  test_cpu_reuse_discard();
   test_move_buffer();
   test_failed_cpu_allocate_preserves_existing_buffer();
   test_bounds_checks();
@@ -231,5 +264,6 @@ int main() {
   test_cuda_move_buffer_if_enabled();
   test_cuda_partial_copy_if_enabled();
   test_cuda_async_stream_ordering_if_enabled();
+  test_cuda_reuse_discard_if_enabled();
   return 0;
 }

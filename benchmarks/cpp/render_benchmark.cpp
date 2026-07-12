@@ -1,207 +1,127 @@
-#include <svo/Builder.hpp>
-#include <svo/DeviceBuffer.hpp>
+#include "benchmark_common.hpp"
+
 #include <svo/Renderer.hpp>
 
-#include <cuda_runtime_api.h>
-#include <glm/geometric.hpp>
-
-#include <cmath>
 #include <cstdint>
 #include <iostream>
-#include <random>
 #include <stdexcept>
-#include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
 
-void check_cuda(cudaError_t result, const char* operation) {
-  if (result != cudaSuccess) {
-    throw std::runtime_error(std::string(operation) + " failed: " + cudaGetErrorString(result));
-  }
-}
-
-class CudaEvent {
- public:
-  CudaEvent() { check_cuda(cudaEventCreate(&event_), "cudaEventCreate"); }
-  ~CudaEvent() {
-    if (event_ != nullptr) {
-      (void)cudaEventDestroy(event_);
-    }
-  }
-
-  CudaEvent(const CudaEvent&) = delete;
-  CudaEvent& operator=(const CudaEvent&) = delete;
-
-  cudaEvent_t get() const noexcept { return event_; }
-
- private:
-  cudaEvent_t event_ = nullptr;
+struct RenderRun {
+  svo_bench::TimingMetrics metrics;
+  svo::TraversalStats stats;
 };
 
-class CudaStream {
- public:
-  CudaStream() { check_cuda(cudaStreamCreate(&stream_), "cudaStreamCreate"); }
-  ~CudaStream() {
-    if (stream_ != nullptr) {
-      (void)cudaStreamDestroy(stream_);
-    }
-  }
-
-  CudaStream(const CudaStream&) = delete;
-  CudaStream& operator=(const CudaStream&) = delete;
-
-  cudaStream_t get() const noexcept { return stream_; }
-
- private:
-  cudaStream_t stream_ = nullptr;
-};
-
-float elapsed_ms(cudaEvent_t start, cudaEvent_t stop) {
-  float milliseconds = 0.0f;
-  check_cuda(cudaEventElapsedTime(&milliseconds, start, stop), "cudaEventElapsedTime");
-  return milliseconds;
+bool run_forward(const svo_bench::BenchmarkConfig& config) {
+  return config.operation == "default" || config.operation == "both" || config.operation == "forward";
 }
 
-std::vector<glm::ivec3> make_sparse_scene(int max_depth) {
-  const int grid_size = 1 << max_depth;
-  std::vector<glm::ivec3> coordinates;
-  coordinates.reserve(24000);
-  for (int z = 0; z < grid_size; ++z) {
-    for (int y = 0; y < grid_size; ++y) {
-      for (int x = 0; x < grid_size; ++x) {
-        const float nx = (static_cast<float>(x) + 0.5f) / static_cast<float>(grid_size) - 0.5f;
-        const float ny = (static_cast<float>(y) + 0.5f) / static_cast<float>(grid_size) - 0.5f;
-        const float nz = (static_cast<float>(z) + 0.5f) / static_cast<float>(grid_size) - 0.5f;
-        const bool inside_sphere = nx * nx + ny * ny + nz * nz <= 0.24f * 0.24f;
-        if (inside_sphere && ((x * 13 + y * 17 + z * 19) % 5) == 0) {
-          coordinates.emplace_back(x, y, z);
-        }
-      }
-    }
-  }
-  return coordinates;
+bool run_backward(const svo_bench::BenchmarkConfig& config) {
+  return config.operation == "default" || config.operation == "both" || config.operation == "backward";
 }
 
-void make_rays(std::size_t count, std::vector<glm::vec3>& origins, std::vector<glm::vec3>& directions) {
-  std::mt19937 rng(20260712u);
-  std::uniform_real_distribution<float> uv_dist(0.1f, 0.9f);
-
-  origins.clear();
-  directions.clear();
-  origins.reserve(count);
-  directions.reserve(count);
-  for (std::size_t index = 0; index < count; ++index) {
-    const float y = uv_dist(rng);
-    const float z = uv_dist(rng);
-    origins.push_back({-0.5f, y, z});
-    directions.push_back(glm::normalize(glm::vec3{1.0f, 0.5f - y, 0.5f - z}));
+void validate_operation(const svo_bench::BenchmarkConfig& config) {
+  if (!run_forward(config) && !run_backward(config)) {
+    throw std::runtime_error("--operation must be forward, backward, both, or omitted");
   }
 }
 
-void make_payloads(const svo::Octree& octree, std::vector<float>& sigma, std::vector<float>& color) {
-  sigma.resize(octree.num_leaves());
-  color.resize(octree.num_leaves() * 3u);
-  for (std::size_t index = 0; index < octree.num_leaves(); ++index) {
-    const float t = static_cast<float>(index % 97u) / 96.0f;
-    sigma[index] = 0.25f + 2.0f * t;
-    color[index * 3u + 0u] = 0.5f + 0.5f * std::sin(6.2831853f * t);
-    color[index * 3u + 1u] = 0.5f + 0.5f * std::sin(6.2831853f * (t + 0.3333333f));
-    color[index * 3u + 2u] = 0.5f + 0.5f * std::sin(6.2831853f * (t + 0.6666667f));
-  }
-}
-
-struct RenderMetrics {
-  float transfer_ms = 0.0f;
-  float forward_ms = 0.0f;
-  float backward_ms = 0.0f;
-};
-
-template <typename LaunchForward, typename LaunchBackward>
-RenderMetrics time_render_pair(cudaStream_t stream, int iterations, LaunchForward&& forward, LaunchBackward&& backward) {
-  CudaEvent forward_start;
-  CudaEvent forward_stop;
-  CudaEvent backward_start;
-  CudaEvent backward_stop;
-
-  forward();
-  backward();
-  check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize warmup");
-
-  check_cuda(cudaEventRecord(forward_start.get(), stream), "cudaEventRecord forward_start");
-  for (int iteration = 0; iteration < iterations; ++iteration) {
+template <typename Forward, typename Backward>
+void time_render(
+    cudaStream_t stream,
+    const svo_bench::BenchmarkConfig& config,
+    Forward&& forward,
+    Backward&& backward,
+    svo_bench::TimingMetrics& metrics) {
+  if (run_forward(config)) {
     forward();
   }
-  check_cuda(cudaEventRecord(forward_stop.get(), stream), "cudaEventRecord forward_stop");
-  check_cuda(cudaEventSynchronize(forward_stop.get()), "cudaEventSynchronize forward_stop");
-
-  check_cuda(cudaEventRecord(backward_start.get(), stream), "cudaEventRecord backward_start");
-  for (int iteration = 0; iteration < iterations; ++iteration) {
+  if (run_backward(config)) {
     backward();
   }
-  check_cuda(cudaEventRecord(backward_stop.get(), stream), "cudaEventRecord backward_stop");
-  check_cuda(cudaEventSynchronize(backward_stop.get()), "cudaEventSynchronize backward_stop");
+  svo_bench::check(cudaStreamSynchronize(stream), "cudaStreamSynchronize render warmup");
 
-  RenderMetrics metrics;
-  metrics.forward_ms = elapsed_ms(forward_start.get(), forward_stop.get()) / static_cast<float>(iterations);
-  metrics.backward_ms = elapsed_ms(backward_start.get(), backward_stop.get()) / static_cast<float>(iterations);
-  return metrics;
+  if (run_forward(config)) {
+    metrics.kernel_ms = svo_bench::time_cuda_ms(stream, [&]() {
+      for (int iteration = 0; iteration < config.iterations; ++iteration) {
+        forward();
+      }
+    }) / static_cast<double>(config.iterations);
+  }
+
+  if (run_backward(config)) {
+    metrics.backward_kernel_ms = svo_bench::time_cuda_ms(stream, [&]() {
+      for (int iteration = 0; iteration < config.iterations; ++iteration) {
+        backward();
+      }
+    }) / static_cast<double>(config.iterations);
+  }
 }
 
-RenderMetrics benchmark_octree8(
-    const svo::Octree& octree,
+RenderRun run_octree8(
+    const svo::Octree& tree,
     const std::vector<glm::vec3>& origins,
     const std::vector<glm::vec3>& directions,
     const std::vector<float>& sigma,
     const std::vector<float>& color,
     cudaStream_t stream,
-    int iterations) {
-  CudaEvent transfer_start;
-  CudaEvent transfer_stop;
-  auto device_nodes = svo::DeviceBuffer<svo::NodeDescriptor>(octree.nodes().size(), svo::Device::CUDA);
-  auto device_payload_indices =
-      svo::DeviceBuffer<std::uint32_t>(octree.leaf_payload_indices().size(), svo::Device::CUDA);
-  auto device_origins = svo::DeviceBuffer<glm::vec3>(origins.size(), svo::Device::CUDA);
-  auto device_directions = svo::DeviceBuffer<glm::vec3>(directions.size(), svo::Device::CUDA);
-  auto device_sigma = svo::DeviceBuffer<float>(sigma.size(), svo::Device::CUDA);
-  auto device_color = svo::DeviceBuffer<float>(color.size(), svo::Device::CUDA);
-  auto device_rgb = svo::DeviceBuffer<glm::vec3>(origins.size(), svo::Device::CUDA);
-  auto device_depth = svo::DeviceBuffer<float>(origins.size(), svo::Device::CUDA);
-  auto device_opacity = svo::DeviceBuffer<float>(origins.size(), svo::Device::CUDA);
-  auto device_grad_rgb = svo::DeviceBuffer<glm::vec3>(origins.size(), svo::Device::CUDA);
-  auto device_grad_opacity = svo::DeviceBuffer<float>(origins.size(), svo::Device::CUDA);
-  auto device_grad_sigma = svo::DeviceBuffer<float>(sigma.size(), svo::Device::CUDA);
-  auto device_grad_color = svo::DeviceBuffer<float>(color.size(), svo::Device::CUDA);
+    const svo_bench::BenchmarkConfig& config) {
+  RenderRun run;
+  svo::RenderOptions cpu_options;
+  svo::TraversalStats cpu_stats;
+  cpu_options.stats = config.profile ? &cpu_stats : nullptr;
+  run.metrics.cpu_ms = svo_bench::time_wall_ms([&]() {
+    (void)svo::render_volume_cpu(tree, origins, directions, sigma.data(), color.data(), sigma.size(), cpu_options);
+  });
 
-  const std::vector<glm::vec3> grad_rgb(origins.size(), glm::vec3{1.0f, 1.0f, 1.0f});
+  svo::DeviceBuffer<svo::NodeDescriptor> device_nodes(tree.nodes().size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::uint32_t> device_payload_indices(tree.leaf_payload_indices().size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_origins(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_directions(directions.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_sigma(sigma.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_color(color.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_rgb(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_depth(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_opacity(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_grad_rgb(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_grad_opacity(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_grad_sigma(sigma.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_grad_color(color.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<svo::TraversalStats> device_stats(1, svo::Device::CUDA);
+  const std::vector<glm::vec3> grad_rgb(origins.size(), {1.0f, 1.0f, 1.0f});
   const std::vector<float> grad_opacity(origins.size(), 1.0f);
+  svo::TraversalStats zero_stats{};
 
-  check_cuda(cudaEventRecord(transfer_start.get(), stream), "cudaEventRecord transfer_start");
-  device_nodes.copy_from_host(octree.nodes().data(), octree.nodes().size(), stream);
-  device_payload_indices.copy_from_host(
-      octree.leaf_payload_indices().data(), octree.leaf_payload_indices().size(), stream);
-  device_origins.copy_from_host(origins.data(), origins.size(), stream);
-  device_directions.copy_from_host(directions.data(), directions.size(), stream);
-  device_sigma.copy_from_host(sigma.data(), sigma.size(), stream);
-  device_color.copy_from_host(color.data(), color.size(), stream);
-  device_grad_rgb.copy_from_host(grad_rgb.data(), grad_rgb.size(), stream);
-  device_grad_opacity.copy_from_host(grad_opacity.data(), grad_opacity.size(), stream);
-  check_cuda(cudaMemsetAsync(device_grad_sigma.data(), 0, sigma.size() * sizeof(float), stream), "cudaMemsetAsync grad_sigma");
-  check_cuda(cudaMemsetAsync(device_grad_color.data(), 0, color.size() * sizeof(float), stream), "cudaMemsetAsync grad_color");
-  check_cuda(cudaEventRecord(transfer_stop.get(), stream), "cudaEventRecord transfer_stop");
-  check_cuda(cudaEventSynchronize(transfer_stop.get()), "cudaEventSynchronize transfer_stop");
+  run.metrics.h2d_ms = svo_bench::time_cuda_ms(stream, [&]() {
+    device_nodes.copy_from_host(tree.nodes().data(), tree.nodes().size(), stream);
+    device_payload_indices.copy_from_host(tree.leaf_payload_indices().data(), tree.leaf_payload_indices().size(), stream);
+    device_origins.copy_from_host(origins.data(), origins.size(), stream);
+    device_directions.copy_from_host(directions.data(), directions.size(), stream);
+    device_sigma.copy_from_host(sigma.data(), sigma.size(), stream);
+    device_color.copy_from_host(color.data(), color.size(), stream);
+    device_grad_rgb.copy_from_host(grad_rgb.data(), grad_rgb.size(), stream);
+    device_grad_opacity.copy_from_host(grad_opacity.data(), grad_opacity.size(), stream);
+    device_stats.copy_from_host(&zero_stats, 1, stream);
+    svo_bench::check(cudaMemsetAsync(device_grad_sigma.data(), 0, sigma.size() * sizeof(float), stream), "cudaMemsetAsync grad_sigma");
+    svo_bench::check(cudaMemsetAsync(device_grad_color.data(), 0, color.size() * sizeof(float), stream), "cudaMemsetAsync grad_color");
+  });
 
-  RenderMetrics metrics = time_render_pair(
+  svo::RenderOptions options;
+  options.stats = config.profile ? device_stats.data() : nullptr;
+  time_render(
       stream,
-      iterations,
+      config,
       [&]() {
         svo::render_volume_cuda(
             device_nodes.data(),
             device_nodes.size(),
             device_payload_indices.data(),
             device_payload_indices.size(),
-            octree.max_depth(),
-            octree.root_bounds(),
+            tree.max_depth(),
+            tree.root_bounds(),
             device_origins.data(),
             device_directions.data(),
             device_sigma.data(),
@@ -210,7 +130,9 @@ RenderMetrics benchmark_octree8(
             device_depth.data(),
             device_opacity.data(),
             origins.size(),
-            sigma.size());
+            sigma.size(),
+            options,
+            stream);
       },
       [&]() {
         svo::render_volume_backward_cuda(
@@ -218,8 +140,8 @@ RenderMetrics benchmark_octree8(
             device_nodes.size(),
             device_payload_indices.data(),
             device_payload_indices.size(),
-            octree.max_depth(),
-            octree.root_bounds(),
+            tree.max_depth(),
+            tree.root_bounds(),
             device_origins.data(),
             device_directions.data(),
             device_sigma.data(),
@@ -229,66 +151,82 @@ RenderMetrics benchmark_octree8(
             device_grad_sigma.data(),
             device_grad_color.data(),
             origins.size(),
-            sigma.size());
-      });
-  metrics.transfer_ms = elapsed_ms(transfer_start.get(), transfer_stop.get());
-  return metrics;
+            sigma.size(),
+            options,
+            stream);
+      },
+      run.metrics);
+
+  run.metrics.d2h_ms = svo_bench::time_cuda_ms(stream, [&]() {
+    if (config.profile) {
+      device_stats.copy_to_host(&run.stats, 1, stream);
+    }
+  });
+  run.metrics.total_wall_ms = run.metrics.h2d_ms + run.metrics.kernel_ms + run.metrics.backward_kernel_ms + run.metrics.d2h_ms;
+  return run;
 }
 
-RenderMetrics benchmark_wide4(
-    const svo::Octree& octree,
+RenderRun run_wide4(
+    const svo::Octree& tree,
     const std::vector<glm::vec3>& origins,
     const std::vector<glm::vec3>& directions,
     const std::vector<float>& sigma,
     const std::vector<float>& color,
     cudaStream_t stream,
-    int iterations) {
-  CudaEvent transfer_start;
-  CudaEvent transfer_stop;
-  auto device_nodes = svo::DeviceBuffer<svo::WideNodeDescriptor>(octree.wide_nodes().size(), svo::Device::CUDA);
-  auto device_payload_indices =
-      svo::DeviceBuffer<std::uint32_t>(octree.leaf_payload_indices().size(), svo::Device::CUDA);
-  auto device_origins = svo::DeviceBuffer<glm::vec3>(origins.size(), svo::Device::CUDA);
-  auto device_directions = svo::DeviceBuffer<glm::vec3>(directions.size(), svo::Device::CUDA);
-  auto device_sigma = svo::DeviceBuffer<float>(sigma.size(), svo::Device::CUDA);
-  auto device_color = svo::DeviceBuffer<float>(color.size(), svo::Device::CUDA);
-  auto device_rgb = svo::DeviceBuffer<glm::vec3>(origins.size(), svo::Device::CUDA);
-  auto device_depth = svo::DeviceBuffer<float>(origins.size(), svo::Device::CUDA);
-  auto device_opacity = svo::DeviceBuffer<float>(origins.size(), svo::Device::CUDA);
-  auto device_grad_rgb = svo::DeviceBuffer<glm::vec3>(origins.size(), svo::Device::CUDA);
-  auto device_grad_opacity = svo::DeviceBuffer<float>(origins.size(), svo::Device::CUDA);
-  auto device_grad_sigma = svo::DeviceBuffer<float>(sigma.size(), svo::Device::CUDA);
-  auto device_grad_color = svo::DeviceBuffer<float>(color.size(), svo::Device::CUDA);
+    const svo_bench::BenchmarkConfig& config) {
+  RenderRun run;
+  svo::RenderOptions cpu_options;
+  svo::TraversalStats cpu_stats;
+  cpu_options.stats = config.profile ? &cpu_stats : nullptr;
+  run.metrics.cpu_ms = svo_bench::time_wall_ms([&]() {
+    (void)svo::render_volume_cpu(tree, origins, directions, sigma.data(), color.data(), sigma.size(), cpu_options);
+  });
 
-  const std::vector<glm::vec3> grad_rgb(origins.size(), glm::vec3{1.0f, 1.0f, 1.0f});
+  svo::DeviceBuffer<svo::WideNodeDescriptor> device_nodes(tree.wide_nodes().size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::uint32_t> device_payload_indices(tree.leaf_payload_indices().size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_origins(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_directions(directions.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_sigma(sigma.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_color(color.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_rgb(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_depth(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_opacity(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_grad_rgb(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_grad_opacity(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_grad_sigma(sigma.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_grad_color(color.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<svo::TraversalStats> device_stats(1, svo::Device::CUDA);
+  const std::vector<glm::vec3> grad_rgb(origins.size(), {1.0f, 1.0f, 1.0f});
   const std::vector<float> grad_opacity(origins.size(), 1.0f);
+  svo::TraversalStats zero_stats{};
 
-  check_cuda(cudaEventRecord(transfer_start.get(), stream), "cudaEventRecord transfer_start");
-  device_nodes.copy_from_host(octree.wide_nodes().data(), octree.wide_nodes().size(), stream);
-  device_payload_indices.copy_from_host(
-      octree.leaf_payload_indices().data(), octree.leaf_payload_indices().size(), stream);
-  device_origins.copy_from_host(origins.data(), origins.size(), stream);
-  device_directions.copy_from_host(directions.data(), directions.size(), stream);
-  device_sigma.copy_from_host(sigma.data(), sigma.size(), stream);
-  device_color.copy_from_host(color.data(), color.size(), stream);
-  device_grad_rgb.copy_from_host(grad_rgb.data(), grad_rgb.size(), stream);
-  device_grad_opacity.copy_from_host(grad_opacity.data(), grad_opacity.size(), stream);
-  check_cuda(cudaMemsetAsync(device_grad_sigma.data(), 0, sigma.size() * sizeof(float), stream), "cudaMemsetAsync grad_sigma");
-  check_cuda(cudaMemsetAsync(device_grad_color.data(), 0, color.size() * sizeof(float), stream), "cudaMemsetAsync grad_color");
-  check_cuda(cudaEventRecord(transfer_stop.get(), stream), "cudaEventRecord transfer_stop");
-  check_cuda(cudaEventSynchronize(transfer_stop.get()), "cudaEventSynchronize transfer_stop");
+  run.metrics.h2d_ms = svo_bench::time_cuda_ms(stream, [&]() {
+    device_nodes.copy_from_host(tree.wide_nodes().data(), tree.wide_nodes().size(), stream);
+    device_payload_indices.copy_from_host(tree.leaf_payload_indices().data(), tree.leaf_payload_indices().size(), stream);
+    device_origins.copy_from_host(origins.data(), origins.size(), stream);
+    device_directions.copy_from_host(directions.data(), directions.size(), stream);
+    device_sigma.copy_from_host(sigma.data(), sigma.size(), stream);
+    device_color.copy_from_host(color.data(), color.size(), stream);
+    device_grad_rgb.copy_from_host(grad_rgb.data(), grad_rgb.size(), stream);
+    device_grad_opacity.copy_from_host(grad_opacity.data(), grad_opacity.size(), stream);
+    device_stats.copy_from_host(&zero_stats, 1, stream);
+    svo_bench::check(cudaMemsetAsync(device_grad_sigma.data(), 0, sigma.size() * sizeof(float), stream), "cudaMemsetAsync grad_sigma");
+    svo_bench::check(cudaMemsetAsync(device_grad_color.data(), 0, color.size() * sizeof(float), stream), "cudaMemsetAsync grad_color");
+  });
 
-  RenderMetrics metrics = time_render_pair(
+  svo::RenderOptions options;
+  options.stats = config.profile ? device_stats.data() : nullptr;
+  time_render(
       stream,
-      iterations,
+      config,
       [&]() {
         svo::render_volume_wide_cuda(
             device_nodes.data(),
             device_nodes.size(),
             device_payload_indices.data(),
             device_payload_indices.size(),
-            octree.max_depth(),
-            octree.root_bounds(),
+            tree.max_depth(),
+            tree.root_bounds(),
             device_origins.data(),
             device_directions.data(),
             device_sigma.data(),
@@ -297,7 +235,9 @@ RenderMetrics benchmark_wide4(
             device_depth.data(),
             device_opacity.data(),
             origins.size(),
-            sigma.size());
+            sigma.size(),
+            options,
+            stream);
       },
       [&]() {
         svo::render_volume_backward_wide_cuda(
@@ -305,8 +245,8 @@ RenderMetrics benchmark_wide4(
             device_nodes.size(),
             device_payload_indices.data(),
             device_payload_indices.size(),
-            octree.max_depth(),
-            octree.root_bounds(),
+            tree.max_depth(),
+            tree.root_bounds(),
             device_origins.data(),
             device_directions.data(),
             device_sigma.data(),
@@ -316,47 +256,81 @@ RenderMetrics benchmark_wide4(
             device_grad_sigma.data(),
             device_grad_color.data(),
             origins.size(),
-            sigma.size());
-      });
-  metrics.transfer_ms = elapsed_ms(transfer_start.get(), transfer_stop.get());
-  return metrics;
+            sigma.size(),
+            options,
+            stream);
+      },
+      run.metrics);
+
+  run.metrics.d2h_ms = svo_bench::time_cuda_ms(stream, [&]() {
+    if (config.profile) {
+      device_stats.copy_to_host(&run.stats, 1, stream);
+    }
+  });
+  run.metrics.total_wall_ms = run.metrics.h2d_ms + run.metrics.kernel_ms + run.metrics.backward_kernel_ms + run.metrics.d2h_ms;
+  return run;
 }
 
-void print_metrics(const char* topology, const svo::Octree& octree, std::size_t ray_count, const RenderMetrics& metrics) {
-  std::cout << "render benchmark " << topology << '\n';
-  std::cout << "  max_depth: " << octree.max_depth() << '\n';
-  std::cout << "  nodes: " << octree.num_nodes() << '\n';
-  std::cout << "  leaves: " << octree.num_leaves() << '\n';
-  std::cout << "  rays: " << ray_count << '\n';
-  std::cout << "  transfer_ms: " << metrics.transfer_ms << '\n';
-  std::cout << "  forward_kernel_ms: " << metrics.forward_ms << '\n';
-  std::cout << "  backward_kernel_ms: " << metrics.backward_ms << '\n';
+void print_result(
+    const svo_bench::BenchmarkConfig& config,
+    const svo::Octree& tree,
+    const RenderRun& run,
+    std::string_view branching) {
+  const double active_kernel_ms = run_forward(config) && !run_backward(config)
+      ? run.metrics.kernel_ms
+      : run_backward(config) && !run_forward(config)
+      ? run.metrics.backward_kernel_ms
+      : run.metrics.kernel_ms + run.metrics.backward_kernel_ms;
+  const double pixels_per_second = active_kernel_ms > 0.0 ? (static_cast<double>(config.count) / active_kernel_ms) * 1000.0 : 0.0;
+  const double fps = active_kernel_ms > 0.0 ? 1000.0 / active_kernel_ms : 0.0;
+  std::cout << "render " << branching << '\n';
+  std::cout << "  operation: " << (config.operation == "default" ? "both" : config.operation) << '\n';
+  std::cout << "  max_depth: " << tree.max_depth() << '\n';
+  std::cout << "  nodes: " << svo_bench::total_nodes(tree) << '\n';
+  std::cout << "  leaves: " << tree.num_leaves() << '\n';
+  std::cout << "  pixels: " << config.count << '\n';
+  std::cout << "  cpu_reference_wall_ms: " << run.metrics.cpu_ms << '\n';
+  std::cout << "  h2d_ms: " << run.metrics.h2d_ms << '\n';
+  std::cout << "  forward_kernel_ms: " << run.metrics.kernel_ms << '\n';
+  std::cout << "  backward_kernel_ms: " << run.metrics.backward_kernel_ms << '\n';
+  std::cout << "  d2h_ms: " << run.metrics.d2h_ms << '\n';
+  std::cout << "  total_wall_ms: " << run.metrics.total_wall_ms << '\n';
+  std::cout << "  pixels_per_second: " << pixels_per_second << '\n';
+  std::cout << "  fps: " << fps << '\n';
+  if (config.profile) {
+    svo_bench::print_stats(run.stats);
+  }
+  const std::string operation_name = std::string("render_") + (config.operation == "default" ? "both" : config.operation);
+  svo_bench::append_jsonl(config, tree, operation_name, run.metrics, pixels_per_second, run.stats, "pixels_per_second");
 }
 
 }  // namespace
 
-int main() {
-  constexpr int kMaxDepth = 6;
-  constexpr std::size_t kRayCount = 1u << 18u;
-  constexpr int kIterations = 20;
+int main(int argc, char** argv) {
+  const svo_bench::BenchmarkConfig config = svo_bench::parse_config(argc, argv, 1u << 18u);
+  validate_operation(config);
+  svo_bench::print_common_header(config, "render");
+  std::cout << "  operation: " << (config.operation == "default" ? "both" : config.operation) << '\n';
 
-  svo::BuildOptions build_options;
-  build_options.max_depth = kMaxDepth;
-  const std::vector<glm::ivec3> coordinates = make_sparse_scene(kMaxDepth);
-  const svo::Octree octree = svo::Octree::from_voxels_cpu(coordinates, build_options);
-  build_options.branching = svo::BranchingMode::Wide4;
-  const svo::Octree wide = svo::Octree::from_voxels_cpu(coordinates, build_options);
-
+  const std::vector<glm::ivec3> coordinates = svo_bench::make_scene(config);
   std::vector<glm::vec3> origins;
   std::vector<glm::vec3> directions;
-  make_rays(kRayCount, origins, directions);
+  svo_bench::make_rays(config.count, config.seed, origins, directions);
+  svo_bench::CudaStream stream;
 
-  std::vector<float> sigma;
-  std::vector<float> color;
-  make_payloads(octree, sigma, color);
-
-  CudaStream stream;
-  print_metrics("octree8", octree, origins.size(), benchmark_octree8(octree, origins, directions, sigma, color, stream.get(), kIterations));
-  print_metrics("wide4", wide, origins.size(), benchmark_wide4(wide, origins, directions, sigma, color, stream.get(), kIterations));
+  if (config.branching == "octree8" || config.branching == "both") {
+    const svo::Octree tree = svo_bench::build_tree(coordinates, config, "octree8");
+    std::vector<float> sigma;
+    std::vector<float> color;
+    svo_bench::make_payloads(tree, sigma, color);
+    print_result(config, tree, run_octree8(tree, origins, directions, sigma, color, stream.get(), config), "octree8");
+  }
+  if (config.branching == "wide4" || config.branching == "both") {
+    const svo::Octree tree = svo_bench::build_tree(coordinates, config, "wide4");
+    std::vector<float> sigma;
+    std::vector<float> color;
+    svo_bench::make_payloads(tree, sigma, color);
+    print_result(config, tree, run_wide4(tree, origins, directions, sigma, color, stream.get(), config), "wide4");
+  }
   return 0;
 }

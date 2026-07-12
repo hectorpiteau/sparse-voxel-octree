@@ -39,6 +39,31 @@ algorithm changes, increment `scene_version` or add a canonical fixture.
 Milestone 18 should standardize benchmark output around human-readable terminal
 summaries plus JSONL rows for machine comparison.
 
+Current C++ benchmark entry points:
+
+```bash
+./build-cuda/svo_point_query_benchmark --scene sparse_random --grid-size 64 --branching both --seed 20260712 --density 0.035 --iterations 20 --count 1048576 --jsonl benchmarks/results/local.jsonl
+./build-cuda/svo_raycast_benchmark --scene sparse_random --grid-size 64 --branching both --seed 20260712 --density 0.035 --iterations 20 --count 1048576 --jsonl benchmarks/results/local.jsonl
+./build-cuda/svo_render_benchmark --operation both --scene sparse_random --grid-size 64 --branching both --seed 20260712 --density 0.035 --iterations 20 --count 262144 --jsonl benchmarks/results/local.jsonl
+```
+
+Common flags:
+
+- `--scene`: `empty`, `single_voxel`, `dense_cube`, `sphere`, or `sparse_random`.
+- `--grid-size`: power-of-two resolution, with `64`, `128`, and `256` as the standard comparison set.
+- `--branching`: `octree8`, `wide4`, or `both`.
+- `--seed`: deterministic scene/ray/point seed. Default seed is `20260712`.
+- `--density`: sparse-random occupancy probability inside the centered benchmark region.
+- `--iterations`: timed kernel iterations.
+- `--count`: point, ray, or pixel count.
+- `--jsonl`: append machine-readable benchmark rows.
+- `--profile`: enable aggregate traversal counters.
+
+Render also accepts `--operation forward`, `--operation backward`, or `--operation both`.
+The realtime viewer accepts `--profile` to show frame, render,
+transfer/readback, tonemap, display, scene size, backend, and branching data in
+the overlay.
+
 Required metadata:
 
 - date/time
@@ -59,7 +84,7 @@ Required timings:
 - Total wall time in Python/viewer paths.
 - FPS and frame time in realtime viewer paths.
 
-Future profiling counters for Milestone 18:
+Implemented profiling counters for Milestone 18:
 
 - nodes visited
 - child candidates tested
@@ -69,8 +94,9 @@ Future profiling counters for Milestone 18:
 - maximum stack depth
 - memory allocated or allocation count on hot paths
 
-Profiling counters must be disabled by default and compile/runtime gated so
-normal kernels do not pay overhead.
+Profiling counters are disabled by default and runtime-gated through explicit
+benchmark/viewer options. CUDA counters use aggregate atomics only when a
+non-null stats pointer is provided.
 
 ## Milestone 18 Scope
 

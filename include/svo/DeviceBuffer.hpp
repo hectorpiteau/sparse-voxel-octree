@@ -28,6 +28,8 @@ class DeviceBuffer {
   static_assert(std::is_trivially_copyable_v<T>, "DeviceBuffer requires trivially copyable values");
 
  public:
+  using value_type = T;
+
   DeviceBuffer() = default;
 
   explicit DeviceBuffer(std::size_t size, Device device = Device::CPU) {
@@ -77,6 +79,7 @@ class DeviceBuffer {
         release();
         cpu_storage_ = std::move(storage);
         size_ = size;
+        capacity_ = size;
         device_ = Device::CPU;
         break;
       }
@@ -85,10 +88,47 @@ class DeviceBuffer {
         release();
         cuda_data_ = cuda_data;
         size_ = size;
+        capacity_ = size;
         device_ = Device::CUDA;
         break;
       }
     }
+  }
+
+  void reserve_discard(std::size_t capacity, Device device = Device::CPU) {
+    if (capacity <= capacity_ && device == device_) {
+      return;
+    }
+    allocate(capacity, device);
+    size_ = 0;
+    if (device_ == Device::CPU) {
+      cpu_storage_.resize(0);
+    }
+  }
+
+  void resize_discard(std::size_t size, Device device = Device::CPU) {
+    (void)checked_size_bytes(size);
+
+    if (size == 0) {
+      release();
+      device_ = device;
+      return;
+    }
+
+    if (device == device_ && size <= capacity_) {
+      size_ = size;
+      if (device_ == Device::CPU) {
+        cpu_storage_.resize(size);
+      }
+      return;
+    }
+
+    allocate_discard(size, device);
+  }
+
+  void allocate_discard(std::size_t size, Device device = Device::CPU) {
+    release();
+    allocate(size, device);
   }
 
   void release() noexcept {
@@ -99,6 +139,7 @@ class DeviceBuffer {
     cpu_storage_.clear();
     cuda_data_ = nullptr;
     size_ = 0;
+    capacity_ = 0;
     device_ = Device::CPU;
   }
 
@@ -151,7 +192,9 @@ class DeviceBuffer {
   }
 
   std::size_t size() const noexcept { return size_; }
+  std::size_t capacity() const noexcept { return capacity_; }
   std::size_t size_bytes() const noexcept { return size_ * sizeof(T); }
+  std::size_t capacity_bytes() const noexcept { return capacity_ * sizeof(T); }
   bool empty() const noexcept { return size_ == 0; }
   Device device() const noexcept { return device_; }
 
@@ -168,11 +211,13 @@ class DeviceBuffer {
   void move_from(DeviceBuffer&& other) noexcept {
     device_ = other.device_;
     size_ = other.size_;
+    capacity_ = other.capacity_;
     cpu_storage_ = std::move(other.cpu_storage_);
     cuda_data_ = other.cuda_data_;
 
     other.device_ = Device::CPU;
     other.size_ = 0;
+    other.capacity_ = 0;
     other.cuda_data_ = nullptr;
   }
 
@@ -258,6 +303,7 @@ class DeviceBuffer {
 
   Device device_ = Device::CPU;
   std::size_t size_ = 0;
+  std::size_t capacity_ = 0;
   std::vector<T> cpu_storage_;
   T* cuda_data_ = nullptr;
 };

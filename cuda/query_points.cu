@@ -65,6 +65,12 @@ __device__ int floor_to_int_device(float value) noexcept {
   return static_cast<int>(floorf(value));
 }
 
+__device__ void add_stat_device(std::uint64_t* field, std::uint64_t value = 1) noexcept {
+  if (field != nullptr) {
+    atomicAdd(reinterpret_cast<unsigned long long*>(field), static_cast<unsigned long long>(value));
+  }
+}
+
 __device__ std::int32_t query_single_point_device(
     const NodeDescriptor* nodes,
     std::size_t num_nodes,
@@ -74,7 +80,8 @@ __device__ std::int32_t query_single_point_device(
     const glm::vec3& min_bound,
     const glm::vec3& max_bound,
     const glm::vec3& point,
-    bool return_payload_indices) noexcept {
+    bool return_payload_indices,
+    TraversalStats* stats) noexcept {
   if (num_nodes == 0 || !contains_point_device(min_bound, max_bound, point)) {
     return -1;
   }
@@ -98,6 +105,10 @@ __device__ std::int32_t query_single_point_device(
   while (true) {
     if (node_index >= num_nodes) {
       return -1;
+    }
+    if (stats != nullptr) {
+      add_stat_device(&stats->nodes_visited);
+      add_stat_device(&stats->child_candidates_tested);
     }
 
     const NodeDescriptor descriptor = nodes[node_index];
@@ -138,7 +149,8 @@ __device__ std::int32_t query_single_point_wide_device(
     const glm::vec3& min_bound,
     const glm::vec3& max_bound,
     const glm::vec3& point,
-    bool return_payload_indices) noexcept {
+    bool return_payload_indices,
+    TraversalStats* stats) noexcept {
   if (num_nodes == 0 || !contains_point_device(min_bound, max_bound, point)) {
     return -1;
   }
@@ -162,6 +174,10 @@ __device__ std::int32_t query_single_point_wide_device(
   while (true) {
     if (node_index >= num_nodes) {
       return -1;
+    }
+    if (stats != nullptr) {
+      add_stat_device(&stats->nodes_visited);
+      add_stat_device(&stats->child_candidates_tested);
     }
 
     const WideNodeDescriptor descriptor = nodes[node_index];
@@ -204,7 +220,8 @@ __global__ void query_points_kernel(
     const glm::vec3* points,
     std::int32_t* results,
     std::size_t count,
-    bool return_payload_indices) {
+    bool return_payload_indices,
+    TraversalStats* stats) {
   const std::size_t index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
       static_cast<std::size_t>(threadIdx.x);
   if (index >= count) {
@@ -220,7 +237,8 @@ __global__ void query_points_kernel(
       min_bound,
       max_bound,
       points[index],
-      return_payload_indices);
+      return_payload_indices,
+      stats);
 }
 
 __global__ void query_points_wide_kernel(
@@ -234,7 +252,8 @@ __global__ void query_points_wide_kernel(
     const glm::vec3* points,
     std::int32_t* results,
     std::size_t count,
-    bool return_payload_indices) {
+    bool return_payload_indices,
+    TraversalStats* stats) {
   const std::size_t index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
       static_cast<std::size_t>(threadIdx.x);
   if (index >= count) {
@@ -250,7 +269,8 @@ __global__ void query_points_wide_kernel(
       min_bound,
       max_bound,
       points[index],
-      return_payload_indices);
+      return_payload_indices,
+      stats);
 }
 
 void check_not_null(const void* pointer, std::size_t count, const char* name) {
@@ -307,7 +327,8 @@ void query_points_cuda(
       points,
       results,
       count,
-      options.return_payload_indices);
+      options.return_payload_indices,
+      options.stats);
 
   check_cuda_launch(cudaGetLastError(), "query_points_kernel launch");
 }
@@ -352,7 +373,8 @@ void query_points_wide_cuda(
       points,
       results,
       count,
-      options.return_payload_indices);
+      options.return_payload_indices,
+      options.stats);
 
   check_cuda_launch(cudaGetLastError(), "query_points_wide_kernel launch");
 }

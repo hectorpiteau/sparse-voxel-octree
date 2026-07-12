@@ -60,6 +60,15 @@ class CameraOrbit:
         ]
 
 
+@dataclass
+class FrameProfile:
+    render_ms: float = 0.0
+    transfer_ms: float = 0.0
+    readback_ms: float = 0.0
+    tonemap_ms: float = 0.0
+    display_ms: float = 0.0
+
+
 def torch_cuda_available() -> bool:
     if not svo.cuda_enabled():
         return False
@@ -167,7 +176,8 @@ def render_cpu(
     origins: np.ndarray,
     directions: np.ndarray,
     early_stop_transmittance: float,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, FrameProfile]:
+    start = time.perf_counter()
     rgb, _depth, opacity = svo.render_volume(
         scene.tree,
         origins,
@@ -177,7 +187,7 @@ def render_cpu(
         background_color=(0.015, 0.018, 0.026),
         early_stop_transmittance=early_stop_transmittance,
     )
-    return rgb, opacity
+    return rgb, opacity, FrameProfile(render_ms=(time.perf_counter() - start) * 1000.0)
 
 
 def prepare_cuda_scene(scene: ScenePayload) -> tuple[Any, Any, Any]:
@@ -196,12 +206,21 @@ def render_cuda(
     origins: np.ndarray,
     directions: np.ndarray,
     early_stop_transmittance: float,
-) -> tuple[np.ndarray, np.ndarray]:
+    profile: bool,
+) -> tuple[np.ndarray, np.ndarray, FrameProfile]:
     import torch
 
+    timings = FrameProfile()
     with torch.no_grad():
+        if profile:
+            torch.cuda.synchronize()
+            transfer_start = time.perf_counter()
         origins_t = torch.as_tensor(origins, device="cuda")
         directions_t = torch.as_tensor(directions, device="cuda")
+        if profile:
+            torch.cuda.synchronize()
+            timings.transfer_ms = (time.perf_counter() - transfer_start) * 1000.0
+            render_start = time.perf_counter()
         rgb_t, _depth_t, opacity_t = svo.render_volume(
             cuda_tree,
             origins_t,
@@ -211,7 +230,16 @@ def render_cuda(
             background_color=(0.015, 0.018, 0.026),
             early_stop_transmittance=early_stop_transmittance,
         )
-        return rgb_t.detach().cpu().numpy(), opacity_t.detach().cpu().numpy()
+        if profile:
+            torch.cuda.synchronize()
+            timings.render_ms = (time.perf_counter() - render_start) * 1000.0
+            readback_start = time.perf_counter()
+        rgb = rgb_t.detach().cpu().numpy()
+        opacity = opacity_t.detach().cpu().numpy()
+        if profile:
+            torch.cuda.synchronize()
+            timings.readback_ms = (time.perf_counter() - readback_start) * 1000.0
+        return rgb, opacity, timings
 
 
 def draw_overlay(
@@ -222,15 +250,21 @@ def draw_overlay(
     frame_ms: float,
     device: str,
     scene: ScenePayload,
+    profile: FrameProfile | None = None,
 ) -> None:
     lines = [
         f"{fps:6.1f} FPS  {frame_ms:5.2f} ms",
         f"backend: {device}   branching: {scene.branching}   nodes: {scene.num_nodes}   leaves: {scene.num_leaves}",
         "drag: orbit   wheel: zoom   R: reset   Q/Esc: quit",
     ]
+    if profile is not None:
+        lines[1:1] = [
+            f"render: {profile.render_ms:5.2f} ms   transfer/readback: {profile.transfer_ms + profile.readback_ms:5.2f} ms",
+            f"tonemap: {profile.tonemap_ms:5.2f} ms   display: {profile.display_ms:5.2f} ms",
+        ]
     pad = 8
     line_height = font.get_linesize()
-    box = pygame.Rect(8, 8, 520, pad * 2 + line_height * len(lines))
+    box = pygame.Rect(8, 8, 620, pad * 2 + line_height * len(lines))
     overlay = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
     overlay.fill((0, 0, 0, 150))
     surface.blit(overlay, box.topleft)
@@ -263,6 +297,11 @@ def parse_args() -> argparse.Namespace:
         choices=("octree8", "wide4"),
         default="octree8",
         help="Tree topology to build. wide4 requires an even log2(grid-size).",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Show detailed frame timing in the overlay.",
     )
     return parser.parse_args()
 
@@ -335,18 +374,28 @@ def main() -> None:
         origins, directions = generate_rays(args.width, args.height, orbit, args.fov_y)
         if device == "cuda":
             assert cuda_resources is not None
-            rgb, opacity = render_cuda(*cuda_resources, origins, directions, args.early_stop_transmittance)
+            rgb, opacity, profile = render_cuda(
+                *cuda_resources,
+                origins,
+                directions,
+                args.early_stop_transmittance,
+                profile=args.profile,
+            )
         else:
-            rgb, opacity = render_cpu(scene, origins, directions, args.early_stop_transmittance)
+            rgb, opacity, profile = render_cpu(scene, origins, directions, args.early_stop_transmittance)
+        tonemap_start = time.perf_counter()
         frame = tonemap(rgb, opacity)
+        profile.tonemap_ms = (time.perf_counter() - tonemap_start) * 1000.0
 
+        display_start = time.perf_counter()
         pygame.surfarray.blit_array(screen, np.swapaxes(frame, 0, 1))
+        profile.display_ms = (time.perf_counter() - display_start) * 1000.0
         frame_seconds = time.perf_counter() - frame_start
         fps = 1.0 / max(frame_seconds, 1.0e-9)
         fps_ema = fps if fps_ema == 0.0 else 0.90 * fps_ema + 0.10 * fps
         frame_ms = frame_seconds * 1000.0
         frame_ms_ema = frame_ms if frame_ms_ema == 0.0 else 0.90 * frame_ms_ema + 0.10 * frame_ms
-        draw_overlay(pygame, screen, font, fps_ema, frame_ms_ema, device, scene)
+        draw_overlay(pygame, screen, font, fps_ema, frame_ms_ema, device, scene, profile if args.profile else None)
         pygame.display.flip()
         clock.tick(0)
 

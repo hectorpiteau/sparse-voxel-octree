@@ -173,6 +173,14 @@ void validate_payload(const Octree& octree, const float* sigma, const float* col
   }
 }
 
+void add_stat(std::uint64_t& field, std::uint64_t value = 1) noexcept {
+  field += value;
+}
+
+void update_max_stat(std::uint64_t& field, std::uint64_t value) noexcept {
+  field = std::max(field, value);
+}
+
 void composite_leaf(
     const Octree& octree,
     const float* sigma,
@@ -188,6 +196,9 @@ void composite_leaf(
   const float t1 = std::min(segment.t_far, options.far_plane);
   if (t1 <= t0) {
     return;
+  }
+  if (options.stats != nullptr) {
+    add_stat(options.stats->leaf_segments);
   }
 
   const std::uint32_t payload_index = octree.leaf_payload_indices()[static_cast<std::size_t>(segment.leaf_id)];
@@ -221,7 +232,14 @@ void traverse_node(
     Accumulator& accum) {
   if (node_index >= octree.nodes().size() || depth_remaining <= 0 ||
       accum.transmittance <= options.early_stop_transmittance) {
+    if (options.stats != nullptr && accum.transmittance <= options.early_stop_transmittance) {
+      add_stat(options.stats->early_terminations);
+    }
     return;
+  }
+  if (options.stats != nullptr) {
+    add_stat(options.stats->nodes_visited);
+    add_stat(options.stats->stack_pops);
   }
 
   const NodeDescriptor descriptor = octree.nodes()[node_index];
@@ -235,6 +253,9 @@ void traverse_node(
     const std::uint8_t child_bit = static_cast<std::uint8_t>(1u << child_index);
     if ((child_mask & child_bit) == 0u) {
       continue;
+    }
+    if (options.stats != nullptr) {
+      add_stat(options.stats->child_candidates_tested);
     }
 
     const Aabb child = child_bounds(bounds, child_index);
@@ -276,11 +297,20 @@ void traverse_node(
 
   for (const SegmentCandidate& candidate : candidates) {
     if (accum.transmittance <= options.early_stop_transmittance) {
+      if (options.stats != nullptr) {
+        add_stat(options.stats->early_terminations);
+      }
       break;
     }
     if (candidate.leaf) {
       composite_leaf(octree, sigma, color, candidate, options, accum);
     } else {
+      if (options.stats != nullptr) {
+        add_stat(options.stats->stack_pushes);
+        update_max_stat(
+            options.stats->max_stack_depth,
+            static_cast<std::uint64_t>(octree.max_depth() - candidate.depth_remaining + 1));
+      }
       traverse_node(
           octree,
           candidate.node_index,
@@ -309,7 +339,14 @@ void traverse_wide_node(
     Accumulator& accum) {
   if (node_index >= octree.wide_nodes().size() || depth_remaining <= 0 ||
       accum.transmittance <= options.early_stop_transmittance) {
+    if (options.stats != nullptr && accum.transmittance <= options.early_stop_transmittance) {
+      add_stat(options.stats->early_terminations);
+    }
     return;
+  }
+  if (options.stats != nullptr) {
+    add_stat(options.stats->nodes_visited);
+    add_stat(options.stats->stack_pops);
   }
 
   const WideNodeDescriptor descriptor = octree.wide_nodes()[node_index];
@@ -322,6 +359,9 @@ void traverse_wide_node(
   for (std::uint64_t active_mask = child_mask; active_mask != 0u; active_mask &= active_mask - 1u) {
     const int child_index = std::countr_zero(active_mask);
     const std::uint64_t child_bit = 1ull << child_index;
+    if (options.stats != nullptr) {
+      add_stat(options.stats->child_candidates_tested);
+    }
 
     const Aabb child = wide_child_bounds(bounds, child_index);
     float t_near = 0.0f;
@@ -362,11 +402,20 @@ void traverse_wide_node(
 
   for (const SegmentCandidate& candidate : candidates) {
     if (accum.transmittance <= options.early_stop_transmittance) {
+      if (options.stats != nullptr) {
+        add_stat(options.stats->early_terminations);
+      }
       break;
     }
     if (candidate.leaf) {
       composite_leaf(octree, sigma, color, candidate, options, accum);
     } else {
+      if (options.stats != nullptr) {
+        add_stat(options.stats->stack_pushes);
+        update_max_stat(
+            options.stats->max_stack_depth,
+            static_cast<std::uint64_t>(octree.max_depth() - candidate.depth_remaining + 2));
+      }
       traverse_wide_node(
           octree,
           candidate.node_index,
@@ -414,6 +463,10 @@ void render_one(
         root_leaf.t_far = root_t_far;
         composite_leaf(octree, sigma, color, root_leaf, options, accum);
       } else {
+        if (options.stats != nullptr) {
+          add_stat(options.stats->stack_pushes);
+          update_max_stat(options.stats->max_stack_depth, 1);
+        }
         if (octree.branching() == BranchingMode::Wide4) {
           traverse_wide_node(
               octree,

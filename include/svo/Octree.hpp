@@ -33,6 +33,16 @@ const char* branching_mode_name(BranchingMode mode) noexcept;
 
 using CudaStreamHandle = void*;
 
+struct TraversalStats {
+  std::uint64_t nodes_visited = 0;
+  std::uint64_t child_candidates_tested = 0;
+  std::uint64_t leaf_segments = 0;
+  std::uint64_t early_terminations = 0;
+  std::uint64_t stack_pushes = 0;
+  std::uint64_t stack_pops = 0;
+  std::uint64_t max_stack_depth = 0;
+};
+
 struct BuildOptions {
   int max_depth = 0;
   Device device = Device::CPU;
@@ -42,6 +52,7 @@ struct BuildOptions {
 
 struct QueryOptions {
   bool return_payload_indices = false;
+  TraversalStats* stats = nullptr;
 };
 
 struct RenderOptions {
@@ -51,6 +62,7 @@ struct RenderOptions {
   float early_stop_transmittance = 1.0e-4f;
   bool store_aux = false;
   bool enable_empty_space_skipping = true;
+  TraversalStats* stats = nullptr;
 };
 
 class NodeDescriptor final {
