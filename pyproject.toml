@@ -55,6 +55,7 @@ install.components = ["python"]
 sdist.include = [
   "benchmarks/**",
   "cuda/**",
+  "docs/*.md",
   "docs/assets/**",
   "examples/**",
   "include/**",

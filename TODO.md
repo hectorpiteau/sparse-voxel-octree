@@ -805,33 +805,57 @@ Goal: make the project usable by new developers and coding agents.
 
 ### Tasks
 
-- [ ] Add installation guide.
-- [ ] Add C++ usage guide.
-- [ ] Add Python usage guide.
-- [ ] Add PyTorch rendering guide.
-- [ ] Add differentiability notes.
-- [ ] Add architecture document.
-- [ ] Add data layout document.
-- [ ] Add testing guide.
-- [ ] Add packaging guide.
-- [ ] Add Torch/CUDA compatibility matrix to installation and packaging docs.
-- [ ] Add troubleshooting guide.
+- [x] Add installation guide.
+- [x] Add C++ usage guide.
+- [x] Add Python usage guide.
+- [x] Add PyTorch rendering guide.
+- [x] Add differentiability notes.
+- [x] Add architecture document.
+- [x] Add data layout document.
+- [x] Add testing guide.
+- [x] Add packaging guide.
+- [x] Add Torch/CUDA compatibility matrix to installation and packaging docs.
+- [x] Add troubleshooting guide.
+
+### Docsify / GitHub Pages
+
+- [ ] Add a Docsify shell for the Markdown documentation.
+- [ ] Add `docs/_sidebar.md` with the documentation navigation tree.
+- [ ] Add `docs/_coverpage.md` or a simple landing page using the existing project logo.
+- [ ] Add `docs/.nojekyll` so GitHub Pages serves Docsify assets correctly.
+- [ ] Add local preview instructions, for example `npx docsify-cli serve docs`.
+- [ ] Add a GitHub Actions workflow or Pages configuration note to publish `docs/` to GitHub Pages.
+- [ ] Verify internal links and images render correctly in both GitHub Markdown and Docsify.
+- [ ] Keep Docsify optional: no runtime package dependency and no impact on Python/C++ builds.
 
 ### Examples
 
-- [ ] Build tree from voxel coordinates.
-- [ ] Query points.
-- [ ] Raycast from camera.
-- [ ] Gather per-voxel features.
-- [ ] Render density/color bricks.
+- [x] Build tree from voxel coordinates.
+- [x] Query points.
+- [x] Raycast from camera.
+- [x] Gather per-voxel features.
+- [x] Render density/color payloads.
+- [ ] Render density/color bricks once brick payload layout exists.
 - [ ] Optimize payload with PyTorch loss.
 - [ ] Compare CPU and CUDA outputs.
 
 ### Acceptance criteria
 
 - [ ] New contributor can run examples.
-- [ ] Coding agent has enough context to modify the project safely.
-- [ ] Documentation describes what is differentiable and what is not.
+- [ ] Documentation can be previewed locally through Docsify.
+- [ ] Documentation can be published through GitHub Pages.
+- [x] Coding agent has enough context to modify the project safely.
+- [x] Documentation describes what is differentiable and what is not.
+
+Note: the first Markdown documentation split is in place under `docs/`. The
+remaining open example items should become runnable scripts, not only reference
+snippets in documentation.
+
+Docsify estimate: low to medium effort. A basic local Docsify site over the
+existing Markdown files is about half a day. A clean GitHub Pages setup with
+navigation, link/image cleanup, preview instructions, and CI/publish validation
+is closer to one day. The main risk is link compatibility between GitHub's
+Markdown renderer and Docsify routing, not code complexity.
 
 ---
 
