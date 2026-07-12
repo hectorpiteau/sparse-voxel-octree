@@ -31,6 +31,7 @@ integration.
 - [Documentation](#documentation)
 - [Examples](#examples)
 - [Development](#development)
+- [Contributing](#contributing)
 - [Packaging and CI](#packaging-and-ci)
 - [References](#references)
 - [License](#license)
@@ -194,6 +195,13 @@ UV_CACHE_DIR=/tmp/uv-cache uv build
 See [docs/testing.md](docs/testing.md) for CPU/CUDA test policy and
 [docs/architecture.md](docs/architecture.md) for contributor-facing design
 rules.
+
+## Contributing
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. It
+covers project design constraints, test and documentation expectations, and the
+information every PR should provide so reviewers can understand why the change
+matters.
 
 ## Packaging and CI
 

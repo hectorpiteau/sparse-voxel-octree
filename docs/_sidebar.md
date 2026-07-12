@@ -11,6 +11,7 @@
   * [Architecture](architecture.md)
   * [Data Layout](data-layout.md)
   * [Differentiability](differentiability.md)
+  * [Performance Roadmap](performance-roadmap.md)
   * [Testing](testing.md)
   * [Packaging](packaging.md)
   * [Troubleshooting](troubleshooting.md)

@@ -59,6 +59,7 @@ Temporary static export folders are ignored by `.gitignore`.
 - [Architecture](architecture.md): Layering, ownership, repository layout, and design rules.
 - [Data Layout](data-layout.md): Node descriptors, branching modes, and payload indirection.
 - [Differentiability](differentiability.md): Gradient scope and discrete topology limits.
+- [Performance Roadmap](performance-roadmap.md): Benchmark scenes, metrics, and acceleration decisions.
 - [Testing](testing.md): Local tests, CUDA tests, numerical rules, and CI expectations.
 - [Packaging](packaging.md): Runtime wheels, source distributions, and release flow.
 - [Troubleshooting](troubleshooting.md): Common install, CUDA, Torch, and input issues.

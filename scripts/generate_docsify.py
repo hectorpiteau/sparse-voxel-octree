@@ -32,6 +32,7 @@ DOC_PAGES = [
     DocPage("Architecture", "architecture.md", "Layering, ownership, repository layout, and design rules."),
     DocPage("Data Layout", "data-layout.md", "Node descriptors, branching modes, and payload indirection."),
     DocPage("Differentiability", "differentiability.md", "Gradient scope and discrete topology limits."),
+    DocPage("Performance Roadmap", "performance-roadmap.md", "Benchmark scenes, metrics, and acceleration decisions."),
     DocPage("Testing", "testing.md", "Local tests, CUDA tests, numerical rules, and CI expectations."),
     DocPage("Packaging", "packaging.md", "Runtime wheels, source distributions, and release flow."),
     DocPage("Troubleshooting", "troubleshooting.md", "Common install, CUDA, Torch, and input issues."),

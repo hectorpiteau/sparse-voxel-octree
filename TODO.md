@@ -877,26 +877,30 @@ Context:
 
 ### Decisions
 
-- [ ] Define representative benchmark scenes: empty, single voxel, dense cube, sparse random, sphere, shell, and larger viewer-style scenes.
-- [ ] Define target metrics: kernel time, wall time, FPS, nodes visited, stack traffic, leaf segments composited, memory allocated, and CPU-GPU transfers.
-- [ ] Decide which metrics must be available from C++ benchmarks, Python scripts, and the realtime viewer.
-- [ ] Decide which optimizations are allowed in Milestone 18 because they do not change topology/layout semantics.
-- [ ] Decide which rendering acceleration path starts Milestone 19 after profiling data exists.
-- [ ] Keep dense brick leaves, relative pointers, block-local addressing, contour data, compressed attributes, and serialization explicitly out of Milestones 18 and 19 unless profiling proves they are the immediate bottleneck.
+- [x] Define representative benchmark scenes: empty, single voxel, dense cube, deterministic sparse random, sphere, shell, and larger viewer-style scenes.
+- [x] Define target metrics: kernel time, wall time, FPS, nodes visited, stack traffic, leaf segments composited, memory allocated, and CPU-GPU transfers.
+- [x] Decide which metrics must be available from C++ benchmarks, Python scripts, and the realtime viewer.
+- [x] Decide which optimizations are allowed in Milestone 18 because they do not change topology/layout semantics.
+- [x] Decide which rendering acceleration path starts Milestone 19 after profiling data exists.
+- [x] Keep dense brick leaves, relative pointers, block-local addressing, contour data, compressed attributes, and serialization explicitly out of Milestones 18 and 19 unless profiling proves they are the immediate bottleneck.
 
 ### Candidate Acceleration Ideas
 
-- [ ] Wide4 local DDA/HDDA traversal instead of scanning or sorting many child AABBs.
-- [ ] Compact interval generation before forward/backward rendering.
-- [ ] Optional coarse occupancy or macro-cell accelerator for empty-space skipping.
-- [ ] Dense brick/tile leaves for later layout work.
-- [ ] Advanced descriptor compression for later memory-layout work.
+- [x] Wide4 local DDA/HDDA traversal instead of scanning or sorting many child AABBs.
+- [x] Compact interval generation before forward/backward rendering.
+- [x] Optional coarse occupancy or macro-cell accelerator for empty-space skipping.
+- [x] Dense brick/tile leaves for later layout work.
+- [x] Advanced descriptor compression for later memory-layout work.
 
 ### Acceptance criteria
 
-- [ ] Milestone 18 has a concrete profiling and low-risk optimization scope.
-- [ ] Milestone 19 has one primary rendering acceleration target and clear fallback criteria.
-- [ ] Deferred layout work is captured without blocking the immediate performance pass.
+- [x] Milestone 18 has a concrete profiling and low-risk optimization scope.
+- [x] Milestone 19 has one primary rendering acceleration target and clear fallback criteria.
+- [x] Deferred layout work is captured without blocking the immediate performance pass.
+
+Decision record: see `docs/performance-roadmap.md`. `sparse_random` uses fixed
+seed `20260712` by default and benchmark output should include seed, density,
+grid size, scene version, and branching mode.
 
 ---
 

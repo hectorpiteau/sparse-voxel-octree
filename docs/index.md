@@ -14,6 +14,7 @@ directory.
 - [Architecture](architecture.md): topology/payload split, layering, repository layout, ownership rules.
 - [Data Layout](data-layout.md): node descriptors, branching modes, payload indirection, future layout phases.
 - [Differentiability](differentiability.md): what is differentiable, what is discrete, gradient scope.
+- [Performance Roadmap](performance-roadmap.md): benchmark scenes, metrics, and acceleration decisions.
 - [Testing](testing.md): local tests, CUDA tests, numerical rules, CI expectations.
 - [Packaging](packaging.md): runtime wheels, source distributions, release flow, versioning policy.
 - [Troubleshooting](troubleshooting.md): diagnostics and common install/runtime errors.
