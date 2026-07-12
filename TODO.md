@@ -1,6 +1,6 @@
 # TODO and Milestones
 
-This file is the implementation roadmap for coding agents.
+This file is the implementation roadmap.
 
 The project should be built in milestones. Each milestone should leave the repository in a working, tested state. Do not skip tests to move faster. Do not optimize layout before a correct reference implementation exists.
 
@@ -801,7 +801,7 @@ Goal: continuous integration for correctness and packaging.
 
 ## Milestone 17 — Documentation and examples
 
-Goal: make the project usable by new developers and coding agents.
+Goal: make the project usable by new developers.
 
 ### Tasks
 
@@ -1154,12 +1154,9 @@ These are useful directions but are not assigned to a milestone yet. Do not trea
 These should be resolved before or during implementation.
 
 - [ ] Project name on PyPI.
-- [ ] License.
-- [ ] `pybind11` vs `nanobind`.
 - [ ] Whether PyTorch support is in the main package or separate package.
 - [ ] Initial CUDA version target.
 - [ ] Initial supported compute capabilities.
-- [ ] Whether CPU support is full or reference-only.
 - [ ] Which additional interpolation layouts should be supported after the leaf-centered baseline.
 - [ ] Serialization format.
 - [ ] Whether to support dynamic updates in early versions.
