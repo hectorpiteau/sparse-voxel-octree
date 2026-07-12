@@ -1,41 +1,92 @@
 # Sparse Voxel Octree CUDA
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/d6cd63fe-c4c8-4abd-92f6-e7ad734972bd">
-  <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/a5d8303a-4519-4af8-853d-fab9667387aa">
+[![CI](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/ci.yml)
+[![GPU CI](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/gpu.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/gpu.yml)
+[![Publish](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/publish.yml/badge.svg)](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/publish.yml)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/hectorpiteau/sparse-voxel-octree/blob/main/pyproject.toml)
+[![C++](https://img.shields.io/badge/C%2B%2B-20-blue)](https://github.com/hectorpiteau/sparse-voxel-octree/blob/main/CMakeLists.txt)
+[![CUDA](https://img.shields.io/badge/CUDA-12.x%20source%20builds-76B900)](https://github.com/hectorpiteau/sparse-voxel-octree#compatibility-matrix)
+[![PyPI](https://img.shields.io/badge/PyPI-planned-lightgrey)](https://github.com/hectorpiteau/sparse-voxel-octree#packaging-plan)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-  <img alt="Fallback image description" src="https://github.com/user-attachments/assets/a5d8303a-4519-4af8-853d-fab9667387aa">
-</picture>
+Sparse voxel octree library with a C++20/CUDA core, pybind11 Python bindings,
+NumPy CPU APIs, CUDA traversal/rendering, and optional PyTorch CUDA autograd
+integration.
 
-A C++/CUDA sparse voxel octree library with Python bindings and optional PyTorch autograd integration.
+![Forward render of a colored sparse sphere](docs/assets/forward_render.png)
 
-This project is intended to become both:
+## Contents
 
-1. A reusable C++/CUDA package for applications that need fast sparse spatial indexing, ray traversal, voxel queries, and rendering.
-2. A Python package that exposes the same core functionality through an ergonomic API usable with NumPy, PyTorch, and other Python tools.
-
-The long-term goal is to provide a compact sparse voxel octree acceleration structure that can act as a spatial index into external payload tensors or buffers. This allows users to store arbitrary per-voxel data such as integer labels, densities, RGB colors, normals, learned features, TSDF values, semantic IDs, or application-specific structs.
-
-The design is inspired by the NVIDIA sparse voxel octree work by Laine and Karras, especially the separation between octree topology, traversal, and attribute attachments. This project adapts that idea for a modern C++/CUDA + Python + PyTorch workflow.
+- [Project status](#project-status)
+- [What the project does](#what-the-project-does)
+- [Core idea](#core-idea)
+- [Branching modes](#branching-modes)
+- [Forward renderer example](#forward-renderer-example)
+- [Real-time viewer](#real-time-viewer)
+- [CPU raycast behavior](#cpu-raycast-behavior)
+- [Design principles for coding agents](#design-principles-for-coding-agents)
+- [Repository layout](#repository-layout)
+- [C++ API sketch](#c-api-sketch)
+- [Python API sketch](#python-api-sketch)
+- [PyTorch rendering API sketch](#pytorch-rendering-api-sketch)
+- [Differentiable rendering design](#differentiable-rendering-design)
+- [Data layout phases](#data-layout-phases)
+- [Building from source](#building-from-source)
+- [Packaging plan](#packaging-plan)
+- [CI and release workflow](#ci-and-release-workflow)
+- [Testing](#testing)
+- [Diagnostics](#diagnostics)
+- [Non-goals for the first version](#non-goals-for-the-first-version)
+- [References](#references)
 
 ---
 
 ## Project status
 
-This project is in the planning and early implementation stage.
+The project is a working pre-alpha implementation. The CPU reference path,
+CUDA traversal/rendering kernels, Python package build, and CI workflows exist.
+The API is still allowed to change before `1.0.0`, but changes should now be
+classified as patch/minor/major according to API compatibility.
 
-The first implementation should prioritize correctness, clean APIs, and testability while still using a paper-style bit-packed node descriptor for octree topology. More advanced features such as block/page streaming and additional compression layers can be added later once the basic package, tests, and bindings are stable.
+Current capabilities:
 
-Initial target:
+- C++20 core with GLM math types.
+- pybind11 Python extension built with CMake and `scikit-build-core`.
+- CPU octree construction from voxel coordinates.
+- CPU and CUDA point query, camera ray generation, raycast, trilinear interpolation, and forward volume rendering.
+- CUDA/PyTorch tensor interop for query, raycast, payload gathering, interpolation, and differentiable volume rendering.
+- `svo.VolumeRenderer`, a small `torch.nn.Module` wrapper around the CUDA renderer.
+- Tree-level branching modes: classic 8-way octree and experimental 4x4x4 wide nodes.
+- CPU-first runtime-only Python wheels, source distributions, package smoke tests, and GitHub Actions CI.
 
-- C++20 / CUDA core.
-- GLM for C++ vector and matrix math in the core library.
-- Python bindings using `pybind11` or `nanobind`.
-- Build system based on CMake and `scikit-build-core`.
-- `uv` as the default Python project and packaging frontend.
-- Optional PyTorch CUDA extension with custom forward and backward kernels.
-- CPU reference implementation for tests.
-- CUDA implementation for production workloads.
+Still in progress:
+
+- Public CUDA wheels.
+- Documentation split into dedicated pages.
+- Serialization.
+- Production rendering acceleration beyond the current traversal kernels.
+- Advanced sparse layouts such as DDA interval generation, brick leaves, and VDB-style hierarchy.
+
+## What the project does
+
+This library provides a sparse spatial index over occupied voxel coordinates.
+The tree stores topology and leaf-to-payload indirection; application data lives
+in external arrays or tensors. That keeps the same octree useful for labels,
+density/color fields, learned features, TSDF values, semantic IDs, or
+application-specific payloads.
+
+Typical use cases:
+
+- Build an octree from sparse occupied voxels.
+- Query which leaf or payload index contains a point.
+- Raycast through sparse voxel topology.
+- Render density/color payloads from camera rays.
+- Use CUDA-resident tensors without avoidable CPU-GPU transfers.
+- Optimize density/color payload tensors with PyTorch autograd.
+
+The design is inspired by Laine and Karras' sparse voxel octree work, especially
+the separation between topology, traversal, and attributes, adapted for a modern
+C++/CUDA + Python + PyTorch workflow.
 
 ---
 
@@ -126,7 +177,7 @@ Correct layering:
 
 ```text
 CUDA kernels
-    traversal, query, render_forward, render_backward, gather, scatter
+    traversal, query, renderer forward/backward, interpolation, gather/scatter helpers
 
 C++ library
     memory ownership, octree object, builder, validation, API types
@@ -254,7 +305,7 @@ Non-differentiable or piecewise-discontinuous parts:
 
 ---
 
-## Planned architecture
+## Repository layout
 
 ```text
 sparse-voxel-octree/
@@ -268,62 +319,71 @@ sparse-voxel-octree/
     svo/
       Octree.hpp
       Builder.hpp
+      Camera.hpp
       Renderer.hpp
       Query.hpp
+      Raycast.hpp
+      Interpolation.hpp
       Math.hpp
-      TensorView.hpp
       DeviceBuffer.hpp
       Error.hpp
+      Version.hpp
 
   src/
-    Octree.cpp
-    Builder.cpp
-    Renderer.cpp
-    Query.cpp
-    DeviceBuffer.cpp
+      Octree.cpp
+      Builder.cpp
+      Camera.cpp
+      Renderer.cpp
+      Query.cpp
+      Raycast.cpp
+      Interpolation.cpp
+      Version.cpp
 
   cuda/
+    generate_rays.cu
     query_points.cu
     raycast.cu
-    render_forward.cu
-    render_backward.cu
-    interpolate.cu
-    gather.cu
-    scatter.cu
+    renderer.cu
+    interpolation.cu
 
   python/
     bindings.cpp
-    torch_bindings.cpp
 
   svo/
     __init__.py
-    torch.py
     info.py
+    interpolation.py
+    payload.py
+    rendering.py
+
+  scripts/
+    check_package.py
 
   tests/
     cpp/
-      test_octree.cpp
       test_builder.cpp
+      test_query.cpp
       test_raycast.cpp
+      test_renderer.cpp
+      test_camera.cpp
 
     python/
       test_import.py
       test_build_tree.py
       test_query_cpu.py
-      test_query_cuda.py
       test_raycast.py
-      test_render_forward.py
-      test_gradcheck.py
+      test_rendering.py
+      test_torch_cuda_interop.py
 
   examples/
     python/
       point_query.py
-      torch_render.py
-      optimize_density.py
+      forward_render.py
+      realtime_viewer.py
+      sphere_slice.py
 
     cpp/
       query_example.cpp
-      raycast_example.cpp
 ```
 
 ---
@@ -337,6 +397,9 @@ The C++ API should be usable without Python.
 #include <svo/Builder.hpp>
 #include <svo/Query.hpp>
 
+#include <cstdint>
+#include <vector>
+
 int main() {
     std::vector<glm::ivec3> coords = {
         {0, 0, 0},
@@ -346,9 +409,9 @@ int main() {
 
     svo::BuildOptions options;
     options.max_depth = 8;
-    options.device = svo::Device::CUDA;
+    options.device = svo::Device::CPU;
 
-    svo::Octree tree = svo::Octree::from_voxels(coords, options);
+    svo::Octree tree = svo::build_octree_cpu(coords, options);
 
     std::vector<glm::vec3> points = {
         {0.1f, 0.1f, 0.1f},
@@ -372,14 +435,13 @@ public:
     int64_t num_nodes() const;
     int64_t num_leaves() const;
     std::array<glm::vec3, 2> root_bounds() const;
+    BranchingMode branching() const;
 
     Device device() const;
 
-    const DeviceBuffer<NodeDescriptor>& nodes() const;
-    const DeviceBuffer<uint32_t>& leaf_payload_indices() const;
-
-    void to_cuda(int device_id = 0);
-    void to_cpu();
+    const std::vector<NodeDescriptor>& nodes() const;
+    const std::vector<WideNodeDescriptor>& wide_nodes() const;
+    const std::vector<uint32_t>& leaf_payload_indices() const;
 
     void validate() const;
 };
@@ -389,28 +451,7 @@ public:
 
 ## Python API sketch
 
-The Python API should be simple enough for interactive use.
-
-```python
-import torch
-import svo
-
-coords = torch.tensor(
-    [[0, 0, 0], [1, 2, 3], [4, 4, 4]],
-    dtype=torch.int32,
-    device="cuda",
-)
-
-tree = svo.Octree.from_voxels(coords, max_depth=8)
-
-points = torch.rand(100_000, 3, device="cuda")
-leaf_ids = tree.query(points)
-
-features = torch.randn(tree.num_leaves, 16, device="cuda")
-sampled = features[leaf_ids.clamp_min(0)]
-```
-
-The API should also allow CPU NumPy usage for small data and tests.
+The Python API is meant to be simple enough for interactive use.
 
 ```python
 import numpy as np
@@ -423,11 +464,24 @@ points = np.array([[0.1, 0.1, 0.1]], dtype=np.float32)
 leaf_ids = tree.query(points)
 ```
 
+CUDA query/raycast hot paths use a CUDA-owned tree and CUDA Torch tensors:
+
+```python
+import torch
+
+cuda_tree = tree.to("cuda")
+points_cuda = torch.rand(100_000, 3, device="cuda")
+leaf_ids_cuda = cuda_tree.query(points_cuda)
+
+features = torch.randn(tree.num_leaves, 16, device="cuda")
+sampled = svo.gather_payload(features, leaf_ids_cuda, fill_value=0.0)
+```
+
 ---
 
 ## PyTorch rendering API sketch
 
-The differentiable renderer should be exposed as a normal PyTorch module.
+The differentiable renderer is exposed as a normal PyTorch module.
 
 ```python
 import torch
@@ -463,7 +517,7 @@ loss = rgb.mean() + 0.001 * opacity.mean()
 loss.backward()
 ```
 
-The renderer should allow custom losses in normal PyTorch.
+The renderer allows custom losses in normal PyTorch.
 
 ```python
 pred, _depth, opacity = renderer(origins, directions, sigma, color)
@@ -481,7 +535,7 @@ loss.backward()
 
 ## Differentiable rendering design
 
-The renderer should use the octree as an acceleration structure and differentiate through the continuous parts of the computation.
+The renderer uses the octree as an acceleration structure and differentiates through the continuous parts of the computation.
 
 Forward path:
 
@@ -596,7 +650,7 @@ Requirements:
 - CUDA 12.x toolkit, for CUDA builds.
 - Python >= 3.10.
 - `uv`.
-- Optional: PyTorch for `svo.torch`.
+- Optional: PyTorch for CUDA tensor interop and autograd rendering.
 
 Recommended compiler baseline for C++20 builds: GCC 11+, Clang 14+, MSVC 2022,
 or an equivalent compiler supported by the selected CUDA toolkit. CUDA device
@@ -653,8 +707,8 @@ The Python package should be built using:
 - `uv`
 - `scikit-build-core`
 - CMake
-- `pybind11` or `nanobind`
-- `cibuildwheel` for CI wheel builds
+- `pybind11`
+- GitHub Actions for CPU wheel builds and release publishing
 
 Initial wheels should target a small stable matrix:
 
@@ -847,7 +901,7 @@ Out of scope initially:
 
 ## License
 
-Choose a permissive license such as MIT or Apache-2.0 unless the project needs stricter terms.
+This project is licensed under the MIT License.
 
 Before copying code from any external repository, verify license compatibility.
 
@@ -860,4 +914,3 @@ Before copying code from any external repository, verify license compatibility.
 - PyTorch C++/CUDA extension documentation.
 - uv documentation.
 - scikit-build-core documentation.
-- cibuildwheel documentation.

@@ -760,7 +760,7 @@ Goal: build installable Python wheels and source distributions.
 - [x] Make PyPI wheels Python-runtime-only; keep C++ headers/static library/CMake package in source/CMake installs.
 - [ ] Add `uv publish` workflow.
 - [x] Add package install tests.
-- [ ] Add README badges later if desired.
+- [x] Add README badges later if desired.
 
 ### Acceptance criteria
 
