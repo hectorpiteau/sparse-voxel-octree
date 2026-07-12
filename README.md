@@ -64,6 +64,17 @@ The forward renderer can render external density/color payloads indexed by the o
 
 ![Forward render of a colored sparse sphere](docs/assets/forward_render.png)
 
+## Real-time viewer
+
+`examples/python/realtime_viewer.py` opens a small uncapped pygame viewer for quick renderer performance checks. It builds the same style of sparse sphere in the center of the scene, uses CUDA Torch rendering when available with `--device auto`, and falls back to CPU otherwise.
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv sync --extra viewer
+./.venv/bin/python examples/python/realtime_viewer.py --device auto
+```
+
+Controls: left-click drag orbits the camera around `(0, 0, 0)`, the mouse wheel zooms, `R` resets the camera, and `Q` or `Esc` exits. FPS and frame time are displayed in the top-left corner. The display loop is not frame-capped; GPU-to-CPU readback is still required to show the rendered image in the pygame window.
+
 ## CPU raycast behavior
 
 `Octree.raycast(origins, directions)` accepts NumPy ray batches shaped `(N, 3)` or `(H, W, 3)` and returns `(hit_mask, leaf_ids, t, positions, depths)` with matching leading dimensions. Directions are normalized internally, so `t` is distance along the normalized ray direction and hit positions are `origin + t * normalized_direction`.

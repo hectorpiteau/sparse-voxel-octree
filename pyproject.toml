@@ -29,6 +29,7 @@ classifiers = [
 [project.optional-dependencies]
 test = ["pytest>=8"]
 viz = ["matplotlib>=3.8"]
+viewer = ["pygame>=2.5"]
 
 [project.urls]
 Repository = "https://example.com/sparse-voxel-octree"
