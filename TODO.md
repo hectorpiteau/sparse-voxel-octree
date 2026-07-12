@@ -864,45 +864,113 @@ deployment from GitHub Actions.
 
 ---
 
-## Milestone 17.5 — Production rendering acceleration architecture
+## Milestone 17.5 — Rendering acceleration roadmap
 
-Goal: define and implement the next high-impact rendering acceleration layer after documentation is complete, while preserving differentiable training paths.
+Goal: remove ambiguity before coding more performance work. This milestone is a
+short design/triage milestone, not an implementation milestone.
 
 Context:
 
 - The existing `Octree8` and `Wide4` paths are correct, but wide branching alone is not guaranteed to improve rendering speed.
-- Public high-performance sparse volume systems tend to combine hierarchy with DDA/HDDA traversal, empty-space skipping, compact ray intervals, and dense brick/tile leaves.
-- Treat topology as an acceleration structure unless explicitly designing differentiable topology updates. Payload values such as density, color, and features remain differentiable.
+- Public high-performance sparse volume systems usually combine hierarchy with measured traversal choices, DDA/HDDA stepping, empty-space skipping, compact ray intervals, and sometimes dense brick/tile leaves.
+- Topology and interval membership stay discrete. Payload values such as density, color, and features remain differentiable.
 
-### Phase 1 — Rendering and traversal profiling counters
+### Decisions
 
-- [ ] Add optional CPU/CUDA profiling counters for rendering and ray traversal.
-- [ ] Count nodes visited per ray.
+- [ ] Define representative benchmark scenes: empty, single voxel, dense cube, sparse random, sphere, shell, and larger viewer-style scenes.
+- [ ] Define target metrics: kernel time, wall time, FPS, nodes visited, stack traffic, leaf segments composited, memory allocated, and CPU-GPU transfers.
+- [ ] Decide which metrics must be available from C++ benchmarks, Python scripts, and the realtime viewer.
+- [ ] Decide which optimizations are allowed in Milestone 18 because they do not change topology/layout semantics.
+- [ ] Decide which rendering acceleration path starts Milestone 19 after profiling data exists.
+- [ ] Keep dense brick leaves, relative pointers, block-local addressing, contour data, compressed attributes, and serialization explicitly out of Milestones 18 and 19 unless profiling proves they are the immediate bottleneck.
+
+### Candidate Acceleration Ideas
+
+- [ ] Wide4 local DDA/HDDA traversal instead of scanning or sorting many child AABBs.
+- [ ] Compact interval generation before forward/backward rendering.
+- [ ] Optional coarse occupancy or macro-cell accelerator for empty-space skipping.
+- [ ] Dense brick/tile leaves for later layout work.
+- [ ] Advanced descriptor compression for later memory-layout work.
+
+### Acceptance criteria
+
+- [ ] Milestone 18 has a concrete profiling and low-risk optimization scope.
+- [ ] Milestone 19 has one primary rendering acceleration target and clear fallback criteria.
+- [ ] Deferred layout work is captured without blocking the immediate performance pass.
+
+---
+
+## Milestone 18 — Profiling and low-risk optimization pass
+
+Goal: measure the current implementation and apply optimizations that do not
+change public semantics, topology layout, or differentiability behavior.
+
+### Profiling and Benchmarks
+
+- [ ] Add reproducible C++/Python benchmark entry points for point query, raycast, forward render, backward render, and realtime-viewer-style rendering.
+- [ ] Report GPU kernel time separately from allocation, Python overhead, and CPU-GPU transfer time.
+- [ ] Add optional CPU/CUDA profiling counters for traversal and rendering, disabled by default.
+- [ ] Count nodes visited per ray/query.
 - [ ] Count child candidates tested per ray.
-- [ ] Count active child candidates emitted per ray.
-- [ ] Count child-candidate sorts or ordered insertions where applicable.
 - [ ] Count leaf segments/samples composited per ray.
 - [ ] Count early opacity termination events.
 - [ ] Count stack pushes/pops and maximum stack depth.
-- [ ] Count emitted compact intervals once interval generation exists.
 - [ ] Expose aggregated profiling output in C++ benchmarks.
 - [ ] Expose optional profiling output in Python for debug/viewer use.
-- [ ] Keep profiling disabled by default and compile/runtime gated so hot kernels do not pay overhead in normal rendering.
+- [ ] Keep profiling compile/runtime gated so hot kernels do not pay overhead in normal rendering.
 
-### Phase 2 — Hierarchical DDA / HDDA traversal
+### Low-Risk Optimizations
 
-- [ ] Implement DDA traversal through `Wide4` child grids instead of testing many child AABBs and sorting candidates.
+- [ ] Add explicit destructive/reuse allocation APIs for `DeviceBuffer`.
+  - Consider `reset`, `release_and_allocate`, or reusable capacity-style APIs for hot paths where double allocation is too expensive.
+  - Keep the current `allocate` strong-guarantee behavior as the safe default.
+  - Document whether destructive allocation preserves old contents, old capacity, stream ordering, and failure state.
+- [ ] Reduce avoidable per-call allocations in query, raycast, render, and viewer loops.
+- [ ] Review hidden host synchronization in Python/CUDA hot paths.
+- [ ] Review GIL release around long-running C++/CUDA work.
+- [ ] Improve memory coalescing where it does not require a descriptor redesign.
+- [ ] Reduce stack traffic and register pressure where profiling identifies it as a bottleneck.
+- [ ] Tune launch/block sizes for query, raycast, forward render, and backward render.
+- [ ] Keep `Octree8` and `Wide4` output parity unchanged.
+
+### Explicitly Out of Scope
+
+- No new brick/tile leaf layout.
+- No relative child pointer or block-local descriptor redesign.
+- No serialization format.
+- No interval-rendering rewrite.
+- No topology-changing optimization unless promoted by a new plan.
+
+### Acceptance criteria
+
+- [ ] Benchmarks are reproducible from documented commands.
+- [ ] Benchmark output gives enough data to choose the Milestone 19 acceleration target.
+- [ ] Existing CPU, CUDA, and Torch rendering tests still pass.
+- [ ] Performance changes are documented with before/after numbers.
+- [ ] Any optimization that is scene-dependent is labeled as such.
+
+---
+
+## Milestone 19 — Rendering acceleration implementation
+
+Goal: implement the first measured structural acceleration for rendering, based
+on Milestone 18 profiling results. This milestone is about traversal/rendering
+speed, not general sparse-layout compression.
+
+### Primary Path — Wide4 Local DDA / HDDA
+
+- [ ] Implement CPU reference DDA traversal through `Wide4` child grids.
 - [ ] Step through the local `4 x 4 x 4` child grid in ray order.
 - [ ] Use bit masks to check whether the current child cell is occupied.
 - [ ] Use popcount/rank only after a hit child cell is known to be active.
 - [ ] Avoid per-node child candidate arrays in the hot path.
-- [ ] Add CPU reference implementation first for correctness.
 - [ ] Add CUDA implementation with fixed-size local state and low register pressure.
 - [ ] Preserve the existing 8-way path unless a safe equivalent DDA traversal is added.
-- [ ] Add debug checks comparing old wide traversal and DDA traversal on small scenes.
+- [ ] Keep the previous wide traversal available for debug comparison until confidence is high.
 
-### Phase 3 — Compact interval generation before rendering
+### Secondary Path — Compact Render Intervals
 
+- [ ] Add only if Milestone 18 shows traversal is still a major render bottleneck after DDA.
 - [ ] Add a render prepass that traverses rays and emits compact occupied intervals.
 - [ ] Store interval records as structure-of-arrays for CUDA-friendly access:
   - [ ] `ray_index`
@@ -910,117 +978,54 @@ Context:
   - [ ] `t_end`
   - [ ] `leaf_id`
   - [ ] `payload_index`
-  - [ ] optional `node_id` or `brick_id`
 - [ ] Add prefix-sum/compaction logic for variable interval counts per ray.
 - [ ] Add capacity handling and clear overflow reporting.
-- [ ] Add a second forward-render kernel that consumes intervals and composites color/opacity/depth.
-- [ ] Add a backward-render kernel that consumes the same intervals to scatter gradients into density/color/features.
-- [ ] Keep interval generation non-differentiable by default; document that gradients flow through payload values, not through topology or interval membership.
-- [ ] Support a render-only fast path that can skip storing extra backward metadata.
-- [ ] Support a training path that stores or recomputes the interval data required for backward.
+- [ ] Add a forward-render kernel that consumes intervals and composites color/opacity/depth.
+- [ ] Add a backward-render path that either consumes stored intervals or recomputes intervals according to the chosen memory/performance tradeoff.
+- [ ] Keep interval generation non-differentiable; gradients flow through payload values, not topology or interval membership.
+- [ ] Separate render-only and training modes when their memory/performance tradeoffs differ.
 
-### Phase 4 — Brick leaves and tile values
+### Optional Path — Coarse Occupancy Accelerator
 
-- [ ] Add design for dense brick leaves, initially behind an experimental build/runtime option.
-- [ ] Evaluate brick sizes such as `4^3`, `8^3`, and possibly `16^3`.
-- [ ] Store brick payloads contiguously for coalesced CUDA reads.
-- [ ] Add a brick descriptor or payload-range descriptor without bloating the existing `Octree8` descriptor.
-- [ ] Traverse sparse topology only until a brick leaf is reached.
-- [ ] March inside bricks with local DDA or fixed-step sampling.
-- [ ] Add optional homogeneous tile values for regions that can be skipped or composited without descending.
-- [ ] Define gradient behavior for brick voxel density/color/features.
-- [ ] Keep topology/brick occupancy updates outside autograd unless a later milestone introduces differentiable occupancy.
-
-### Phase 5 — Coarse occupancy accelerator
-
-- [ ] Add an optional top-level occupancy grid or macro-cell bitfield for empty-space skipping before tree traversal.
-- [ ] Evaluate macro resolutions such as `16^3`, `32^3`, and `64^3`.
+- [ ] Add only if profiling shows tree entry through empty space dominates large scenes.
+- [ ] Evaluate top-level macro resolutions such as `16^3`, `32^3`, and `64^3`.
 - [ ] Traverse macro cells with DDA and enter the tree only for occupied macro cells.
-- [ ] Support CUDA-resident occupancy data to avoid CPU-GPU transfers.
-- [ ] Add update/rebuild APIs for occupancy when topology changes.
-- [ ] Document memory cost versus traversal savings.
+- [ ] Keep CUDA-resident occupancy data to avoid CPU-GPU transfers.
 - [ ] Ensure this accelerator is optional and does not change query/render semantics.
+
+### Deferred Layout Work
+
+- Dense brick/tile leaves are deferred to a later sparse-layout milestone.
+- Relative child pointers are deferred to a later compact-descriptor milestone.
+- Block-local addressing is deferred to a later compact-descriptor milestone.
+- Optional contour data and compressed attributes are deferred.
+- Serialization is deferred unless release planning pulls it earlier.
 
 ### Tests
 
-- [ ] CPU DDA traversal matches existing wide traversal on empty, dense, sparse random, sphere, and boundary scenes.
+- [ ] CPU DDA traversal matches existing wide traversal on empty, dense, sparse random, sphere, shell, and boundary scenes.
 - [ ] CUDA DDA traversal matches CPU DDA traversal within existing tolerances.
-- [ ] Compact interval generation matches direct traversal compositing for color, opacity, and depth.
-- [ ] Backward rendering through intervals matches existing finite-difference tests for density and color.
-- [ ] Brick-leaf rendering matches equivalent per-voxel rendering on small scenes.
-- [ ] Coarse occupancy accelerator preserves exact render/query results relative to the non-accelerated path.
-- [ ] Overflow paths for interval buffers fail clearly and do not corrupt outputs.
-- [ ] Profiling counters are deterministic enough for regression checks on fixed scenes.
+- [ ] Forward rendering with DDA matches existing direct traversal for color, opacity, and depth.
+- [ ] Backward rendering with DDA matches existing finite-difference tests for density and color.
+- [ ] Compact interval generation, if implemented, matches direct traversal compositing.
+- [ ] Interval overflow paths, if implemented, fail clearly and do not corrupt outputs.
+- [ ] Optional coarse occupancy acceleration, if implemented, preserves exact render/query results relative to the non-accelerated path.
 
 ### Benchmarks
 
 - [ ] Compare old wide traversal vs wide DDA traversal.
-- [ ] Compare direct traversal rendering vs interval prepass + interval rendering.
-- [ ] Compare octree leaves vs brick leaves at equal scene resolution.
-- [ ] Compare with and without coarse occupancy acceleration.
+- [ ] Compare direct traversal rendering vs interval prepass + interval rendering if intervals are implemented.
+- [ ] Compare with and without coarse occupancy acceleration if it is implemented.
 - [ ] Benchmark forward render and backward render separately.
-- [ ] Report GPU kernel time separately from allocation and CPU-GPU transfer time.
 - [ ] Include realtime viewer FPS measurements for representative small, medium, and large scenes.
 
 ### Acceptance criteria
 
-- [ ] Documentation from Milestone 17 remains current after the new acceleration path is added.
 - [ ] Default rendering remains correct and tested on CPU and CUDA.
 - [ ] Differentiable rendering still supports PyTorch optimization loops.
+- [ ] Benchmarks show whether the acceleration helps, hurts, or is scene-dependent.
 - [ ] Render-only and training modes are clearly separated where their performance/memory tradeoffs differ.
-- [ ] Benchmarks show whether each acceleration layer helps, hurts, or is scene-dependent.
-- [ ] Any approximation, early termination, LOD, or topology-discrete behavior is documented explicitly.
-
----
-
-## Milestone 18 — Optimization pass
-
-Goal: improve performance after correctness is established.
-
-### Tasks
-
-- [ ] Add explicit destructive/reuse allocation APIs for `DeviceBuffer`.
-  - Consider `reset`, `release_and_allocate`, or reusable capacity-style APIs for hot paths where double allocation is too expensive.
-  - Keep the current `allocate` strong-guarantee behavior as the safe default.
-  - Document whether destructive allocation preserves old contents, old capacity, stream ordering, and failure state.
-- [ ] Profile point query.
-- [ ] Profile raycast.
-- [ ] Profile rendering forward.
-- [ ] Profile rendering backward.
-- [ ] Improve memory coalescing.
-- [ ] Improve node layout.
-- [ ] Add Morton ordering.
-- [ ] Add compact child spans.
-- [ ] Reduce stack traffic.
-- [ ] Add optional beam optimization.
-- [ ] Add benchmarks.
-
-### Acceptance criteria
-
-- [ ] Benchmarks are reproducible.
-- [ ] Optimizations do not break tests.
-- [ ] Performance improvements are documented.
-
----
-
-## Milestone 19 — Advanced sparse layout
-
-Goal: move toward a more compact production layout.
-
-### Tasks
-
-- [ ] Add relative child pointers.
-- [ ] Add block-local addressing.
-- [ ] Add optional contour data.
-- [ ] Add optional compressed attributes.
-- [ ] Add serialization format.
-- [ ] Add tests for advanced descriptor features.
-
-### Acceptance criteria
-
-- [ ] Advanced descriptor features preserve base descriptor outputs.
-- [ ] Memory savings are measured.
-- [ ] Users can choose simple or compact layout.
+- [ ] Deferred sparse-layout work is not mixed into the rendering acceleration milestone.
 
 ---
 
@@ -1146,6 +1151,12 @@ These are useful directions but are not assigned to a milestone yet. Do not trea
 - [ ] Add brick-based interpolation for per-leaf dense feature bricks, with explicit boundary stitching behavior.
 - [ ] Add hierarchical/coarse fallback interpolation for samples near sparse edges where one or more neighboring leaves are missing.
 - [ ] Compare interpolation layouts in documentation: leaf-centered, corner-valued, brick-based, and hierarchical fallback.
+- [ ] Add dense brick/tile leaves for production sparse rendering after the first measured rendering acceleration pass.
+- [ ] Add relative child pointers for compact descriptors.
+- [ ] Add block-local addressing for page/block-oriented node storage.
+- [ ] Add optional contour data.
+- [ ] Add optional compressed attributes.
+- [ ] Add serialization format and tests.
 
 ---
 
