@@ -59,6 +59,13 @@ INDEX_HTML = """<!DOCTYPE html>
       max-width: min(520px, 82vw);
     }
 
+    .cover.show {
+      background:
+        radial-gradient(circle at 20% 20%, rgba(186, 230, 253, 0.82), transparent 34%),
+        radial-gradient(circle at 78% 28%, rgba(167, 243, 208, 0.78), transparent 32%),
+        linear-gradient(135deg, #eff6ff 0%, #ccfbf1 48%, #e0f2fe 100%) !important;
+    }
+
     .markdown-section {
       max-width: 980px;
     }

@@ -10,6 +10,8 @@
 [![PyPI](https://img.shields.io/badge/PyPI-planned-lightgrey)](docs/packaging.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+Documentation: <https://hectorpiteau.github.io/sparse-voxel-octree/>
+
 Sparse voxel octree library with a C++20/CUDA core, pybind11 Python bindings,
 NumPy CPU APIs, CUDA traversal/rendering, and optional PyTorch CUDA autograd
 integration.
@@ -114,9 +116,9 @@ uv run python -m svo.info
 
 ## Documentation
 
-The README is intentionally a short entry point. Detailed notes live in `docs/`
-so they can later be rendered as a GitHub Pages site without changing the
-project structure.
+The README is intentionally a short entry point. The full documentation is
+available online at <https://hectorpiteau.github.io/sparse-voxel-octree/> and
+as Markdown sources under `docs/`.
 
 | Topic | Document |
 | --- | --- |
