@@ -704,6 +704,35 @@ and Torch compatibility together.
 
 ---
 
+## CI and release workflow
+
+Pull requests run the CPU-focused validation set:
+
+- Ruff lint checks for Python/package scripts.
+- Python tests on Python 3.10, 3.11, and 3.12.
+- CPU CMake configure/build/test.
+- CPU wheel and source distribution build, package artifact checks, and clean wheel install smoke.
+
+CUDA validation is available through the `GPU CI` workflow. It runs manually or
+when a pull request has the `gpu-ci` label, and expects a self-hosted runner with
+the labels `self-hosted`, `linux`, `x64`, and `cuda`.
+
+Publishing uses PyPI Trusted Publishing. Configure GitHub environments named
+`testpypi` and `pypi`, then add this repository as a trusted publisher on
+TestPyPI/PyPI for the corresponding workflow and environment.
+
+Release checklist:
+
+1. Review whether the change breaks the public Python or C++ API contract.
+2. Choose the next version: patch for fixes/docs/tests/perf, minor for backward-compatible features or pre-1.0 breaking changes, major for post-1.0 breaking changes.
+3. Run `uv run --extra lint ruff check .`.
+4. Run `uv build` and `uv run python scripts/check_package.py`.
+5. Run Python and CMake tests.
+6. Create and push an annotated tag like `v0.1.0`.
+7. Use the publish workflow manually for TestPyPI, or let a `v*` tag publish to PyPI after environment approval.
+
+---
+
 ## Testing
 
 Testing is a core part of this project.

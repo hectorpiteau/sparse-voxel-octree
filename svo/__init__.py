@@ -7,9 +7,9 @@ try:
 except PackageNotFoundError:
     __version__ = "0.0.0+unknown"
 
-from ._svo import BranchingMode, Camera, CameraConvention, CameraIntrinsics, Octree, ValidationError, cuda_enabled
-from .payload import gather_payload
+from ._svo import BranchingMode, Camera, CameraConvention, CameraIntrinsics, Octree, ValidationError
 from .interpolation import sample_trilinear
+from .payload import gather_payload
 from .rendering import VolumeRenderer, render_volume
 
 __all__ = [

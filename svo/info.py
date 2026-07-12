@@ -8,8 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import __version__
-from . import _svo
+from . import __version__, _svo
 from ._svo import cuda_enabled
 
 

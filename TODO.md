@@ -780,22 +780,22 @@ Goal: continuous integration for correctness and packaging.
 
 ### Tasks
 
-- [ ] Add GitHub Actions workflow for CPU tests.
-- [ ] Add workflow for wheel builds.
-- [ ] Add workflow for linting.
-- [ ] Add optional self-hosted GPU runner workflow.
-- [ ] Add TestPyPI publish workflow.
-- [ ] Add PyPI publish workflow on tags.
-- [ ] Cache build dependencies.
-- [ ] Upload wheel artifacts.
+- [x] Add GitHub Actions workflow for CPU tests.
+- [x] Add workflow for wheel builds.
+- [x] Add workflow for linting.
+- [x] Add optional self-hosted GPU runner workflow.
+- [x] Add TestPyPI publish workflow.
+- [x] Add PyPI publish workflow on tags.
+- [x] Cache build dependencies.
+- [x] Upload wheel artifacts.
 
 ### Acceptance criteria
 
-- [ ] PRs run CPU tests.
-- [ ] PRs build at least one wheel.
-- [ ] GPU runner runs CUDA tests.
-- [ ] Tag builds release wheels.
-- [ ] TestPyPI release can be installed.
+- [x] PRs run CPU tests.
+- [x] PRs build at least one wheel.
+- [ ] GPU runner runs CUDA tests after a self-hosted CUDA runner with labels `self-hosted`, `linux`, `x64`, and `cuda` is configured.
+- [x] Tag builds release wheels.
+- [ ] TestPyPI release can be installed after the GitHub `testpypi` environment and TestPyPI Trusted Publisher are configured.
 
 ---
 

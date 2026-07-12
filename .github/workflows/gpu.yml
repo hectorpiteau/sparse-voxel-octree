@@ -1,0 +1,53 @@
+name: GPU CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize, opened, reopened]
+
+permissions:
+  contents: read
+
+env:
+  UV_CACHE_DIR: /tmp/uv-cache
+
+jobs:
+  cuda-tests:
+    name: CUDA tests
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'gpu-ci')
+    runs-on: [self-hosted, linux, x64, cuda]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Print CUDA environment
+        run: |
+          nvidia-smi
+          nvcc --version
+      - name: Configure CUDA build
+        run: cmake -S . -B build-cuda -DSVO_ENABLE_CUDA=ON -DSVO_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+      - name: Build CUDA targets
+        run: cmake --build build-cuda --config Release -j2
+      - name: Run CUDA C++ tests
+        run: ctest --test-dir build-cuda --output-on-failure
+      - name: Create Python environment
+        run: uv venv .venv --python 3.10
+      - name: Install CUDA-enabled editable package
+        run: uv pip install --python .venv/bin/python --reinstall --no-cache -e . -C cmake.define.SVO_ENABLE_CUDA=ON
+      - name: Run Python tests
+        run: ./.venv/bin/python -m pytest tests/python -q
+      - name: Upload CTest logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuda-ctest-logs
+          path: |
+            build-cuda/Testing/**/*.log
+            build-cuda/Testing/Temporary/*
+          if-no-files-found: ignore
