@@ -934,12 +934,85 @@ change public semantics, topology layout, or differentiability behavior.
   - Keep the current `allocate` strong-guarantee behavior as the safe default.
   - Document whether destructive allocation preserves old contents, old capacity, stream ordering, and failure state.
 - [ ] Reduce avoidable per-call allocations in query, raycast, render, and viewer loops.
+  - Current state:
+    - C++ CPU query/raycast/render allocate result vectors per call, which is acceptable for reference APIs but not ideal for repeated loops.
+    - CUDA Torch paths allocate output tensors per call, which is normal for PyTorch-style APIs unless callers provide explicit output buffers.
+    - CUDA NumPy convenience paths in `python/bindings.cpp` allocate `DeviceBuffer`s and transfer inputs/outputs every call; these are convenience APIs, not the fastest path.
+    - The realtime viewer regenerates NumPy rays every frame, converts them to Torch tensors every CUDA frame, and readbacks RGB/opacity every frame for pygame display.
+  - Low-risk implementation path:
+    - Use existing `DeviceBuffer::reserve_discard` / `resize_discard` in C++ benchmark/viewer-like loops first.
+    - Add optional reusable workspaces only for internal benchmarks or debug tools before adding public API surface.
+    - For the Python viewer, cache CUDA ray tensors when the camera is unchanged is not useful because the camera changes while orbiting; better future path is generating rays directly on CUDA or adding a small CUDA viewer output buffer path.
+  - Estimated effort: medium for benchmark/internal reuse, high if adding public output-buffer/workspace APIs.
+  - Risk: medium, because output ownership/lifetime and stream ordering can get messy if exposed publicly.
 - [ ] Review hidden host synchronization in Python/CUDA hot paths.
-- [ ] Review GIL release around long-running C++/CUDA work.
+  - Current state:
+    - `DeviceBuffer::copy_from_host` and `copy_to_host` synchronize when called with the default/null stream. This affects Python NumPy CUDA convenience paths and `to_host()` readbacks.
+    - Torch CUDA query/raycast/render paths use the current PyTorch stream and avoid explicit host sync in the launch path.
+    - CUDA render backward currently synchronizes in the launcher to read the overflow counter back to host. That makes backward a blocking call even from Torch.
+    - Viewer CUDA path intentionally synchronizes/readbacks for display and profiling; this is expected because pygame needs CPU pixels.
+  - Low-risk implementation path:
+    - Document which APIs are intentionally blocking: NumPy CUDA convenience calls, explicit `.cpu().numpy()` readbacks, and backward overflow checking.
+    - Replace the backward overflow host readback with an optional async/status strategy only if benchmarks show it matters.
+    - Add profiler checks around Torch render/backward to confirm no accidental host sync beyond overflow handling.
+  - Estimated effort: small for audit/docs, medium for backward overflow redesign.
+  - Risk: low for audit/docs, medium for changing error reporting from synchronous to deferred.
+- [x] Review GIL release around long-running C++/CUDA work.
+  - Current state:
+    - CUDA NumPy/Torch query, raycast, render, backward render, and interpolation launches release the GIL around C++/CUDA work.
+    - CPU Python methods for build/query/raycast/render, camera ray generation, and trilinear interpolation now release the GIL after inputs have been converted and before result conversion.
+    - Python-side wrappers in `svo/rendering.py` are thin and do not hold the GIL during C++ once the binding releases it.
+  - Low-risk implementation path:
+    - Keep `py::gil_scoped_release` around CPU calls only where inputs/outputs are already converted to C++ containers.
+    - Do not release the GIL while touching Python objects, NumPy buffer metadata, or constructing Python return values.
+  - Validation:
+    - Python tests pass after the binding update.
 - [ ] Improve memory coalescing where it does not require a descriptor redesign.
+  - Current state:
+    - Query/raycast/render read input rays/points from contiguous `glm::vec3` arrays, so input access is mostly coalesced enough.
+    - Outputs are split across arrays for raycast/render, which is good for selective consumers but each thread writes several separate streams.
+    - Traversal reads node descriptors randomly by ray path; that is the dominant non-coalesced access and cannot be fully fixed without traversal/layout changes.
+    - Wide4 child descriptor access uses bit masks/rank and compact node arrays; the child-order traversal still causes path divergence.
+  - Low-risk implementation path:
+    - Check whether `glm::vec3` alignment/stride is exactly 12 bytes on all supported compilers and whether `float4`/padded ray buffers improve throughput.
+    - Prefer coalescing input/output buffers and avoiding unnecessary readbacks before touching descriptor layout.
+    - Keep descriptor redesign, relative pointers, and brick/tile layouts out of Milestone 18.
+  - Estimated effort: medium for measurement and local buffer experiments.
+  - Risk: medium, because changing public/internal vector layout can silently affect Python/Numpy/Torch shape assumptions.
 - [ ] Reduce stack traffic and register pressure where profiling identifies it as a bottleneck.
+  - Current state:
+    - CUDA raycast uses fixed per-thread stacks: `8 * (max_depth + 1)` for Octree8 and `64 * ((max_depth / 2) + 1)` for Wide4.
+    - CUDA render uses both traversal stacks and per-node candidate arrays (`candidates[8]` / `candidates[64]`) sorted per visited node.
+    - CUDA backward render also stores up to `kMaxRenderSegments = 512` per ray, which is heavy but keeps the backward implementation simple and correct.
+    - Profiling counters now expose stack pushes/pops and max stack depth, but they do not directly report register spills or local memory.
+  - Low-risk implementation path:
+    - Use benchmark counters plus Nsight Compute/register spill data before editing stack structures.
+    - For Wide4, prefer Milestone 19 local DDA/HDDA traversal over micro-optimizing the current candidate array path.
+    - For Octree8, consider smaller candidate sorting or near/far child ordering only if render benchmarks show sorting dominates.
+  - Estimated effort: medium for profiling, high for meaningful render traversal changes.
+  - Risk: high for backward/render because traversal order affects compositing correctness and gradient parity.
 - [ ] Tune launch/block sizes for query, raycast, forward render, and backward render.
+  - Current state:
+    - Query and interpolation use `kBlockSize = 256`.
+    - Raycast and render forward/backward use `kBlockSize = 128`.
+    - The values are hard-coded in CUDA launchers, not exposed as options.
+  - Low-risk implementation path:
+    - Benchmark block sizes `64`, `128`, `256`, and possibly `512` per operation and topology.
+    - Record occupancy/register pressure with Nsight Compute when possible, because the best block size may differ between query, raycast, forward render, and backward render.
+    - Keep launch size selection compile-time or internal at first; avoid making it a public API knob unless users demonstrably need it.
+  - Estimated effort: small to benchmark, small/medium to implement internal constants or CMake-tunable launch traits.
+  - Risk: low if changed per-kernel with parity tests.
 - [ ] Keep `Octree8` and `Wide4` output parity unchanged.
+  - Current state:
+    - CPU/CUDA tests already cover query, raycast, render, and backward parity across `Octree8`/`Wide4` for supported operations.
+    - Interpolation is intentionally still not generalized to `Wide4`.
+    - Benchmark smoke checks currently validate CUDA results against CPU reference for query/raycast; render benchmark is timing-oriented and does not compare full images.
+  - Low-risk implementation path:
+    - After each optimization, run CPU and CUDA test suites plus Python rendering tests.
+    - Add benchmark-time optional parity checks for render images only if the extra CPU reference cost is acceptable for smoke mode.
+    - Any optimization that changes traversal order must preserve front-to-back compositing within tolerance and keep backward finite-difference tests passing.
+  - Estimated effort: small for test discipline, medium if adding render parity checks to benchmarks.
+  - Risk: low for mechanical launch/allocation changes, high for traversal-order changes.
 
 ### Explicitly Out of Scope
 
@@ -953,7 +1026,7 @@ change public semantics, topology layout, or differentiability behavior.
 
 - [x] Benchmarks are reproducible from documented commands.
 - [x] Benchmark output gives enough data to choose the Milestone 19 acceleration target.
-- [ ] Existing CPU, CUDA, and Torch rendering tests still pass.
+- [x] Existing CPU, CUDA, and Torch rendering tests still pass.
 - [ ] Performance changes are documented with before/after numbers.
 - [ ] Any optimization that is scene-dependent is labeled as such.
 

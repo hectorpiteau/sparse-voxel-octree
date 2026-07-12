@@ -272,26 +272,34 @@ py::object sample_trilinear_cpu_binding(
 
   if (payload.double_precision) {
     const auto* payload_data = static_cast<const double*>(payload.array.data());
-    const std::vector<double> values = svo::sample_trilinear_double(
-        octree,
-        points.points,
-        payload_data,
-        static_cast<std::size_t>(payload.rows),
-        static_cast<std::size_t>(payload.channels),
-        fill_value);
+    std::vector<double> values;
+    {
+      py::gil_scoped_release release;
+      values = svo::sample_trilinear_double(
+          octree,
+          points.points,
+          payload_data,
+          static_cast<std::size_t>(payload.rows),
+          static_cast<std::size_t>(payload.channels),
+          fill_value);
+    }
     py::array_t<double> output(output_shape);
     std::copy(values.begin(), values.end(), static_cast<double*>(output.mutable_data()));
     return output;
   }
 
   const auto* payload_data = static_cast<const float*>(payload.array.data());
-  const std::vector<float> values = svo::sample_trilinear_float(
-      octree,
-      points.points,
-      payload_data,
-      static_cast<std::size_t>(payload.rows),
-      static_cast<std::size_t>(payload.channels),
-      static_cast<float>(fill_value));
+  std::vector<float> values;
+  {
+    py::gil_scoped_release release;
+    values = svo::sample_trilinear_float(
+        octree,
+        points.points,
+        payload_data,
+        static_cast<std::size_t>(payload.rows),
+        static_cast<std::size_t>(payload.channels),
+        static_cast<float>(fill_value));
+  }
   py::array_t<float> output(output_shape);
   std::copy(values.begin(), values.end(), static_cast<float*>(output.mutable_data()));
   return output;
@@ -571,15 +579,18 @@ py::tuple render_volume_cpu_binding(
       enable_empty_space_skipping);
   const auto* sigma_data = static_cast<const float*>(payload.sigma.data());
   const auto* color_data = static_cast<const float*>(payload.color.data());
-  return render_batch_to_numpy(
-      svo::render_volume_cpu(
-          octree,
-          ray_batch,
-          sigma_data,
-          color_data,
-          static_cast<std::size_t>(payload.rows),
-          options),
-      rays.image_shaped);
+  svo::RenderBatch results;
+  {
+    py::gil_scoped_release release;
+    results = svo::render_volume_cpu(
+        octree,
+        ray_batch,
+        sigma_data,
+        color_data,
+        static_cast<std::size_t>(payload.rows),
+        options);
+  }
+  return render_batch_to_numpy(results, rays.image_shaped);
 }
 
 
@@ -1705,7 +1716,12 @@ PYBIND11_MODULE(_svo, module) {
       .def(
           "generate_rays",
           [](const svo::Camera& camera) {
-            return ray_batch_to_numpy(svo::generate_rays_cpu(camera));
+            svo::RayBatch rays;
+            {
+              py::gil_scoped_release release;
+              rays = svo::generate_rays_cpu(camera);
+            }
+            return ray_batch_to_numpy(rays);
           })
       .def_property_readonly("width", &svo::Camera::width)
       .def_property_readonly("height", &svo::Camera::height)
@@ -1735,17 +1751,26 @@ PYBIND11_MODULE(_svo, module) {
 
             const std::vector<glm::ivec3> coordinates = coordinates_from_numpy(coords);
             if (payload_indices.is_none()) {
-              return svo::Octree::from_voxels_cpu(coordinates, options);
+              svo::Octree octree;
+              {
+                py::gil_scoped_release release;
+                octree = svo::Octree::from_voxels_cpu(coordinates, options);
+              }
+              return octree;
             }
 
             py::array payload_array = py::array::ensure(payload_indices);
             if (!payload_array) {
               throw py::type_error("payload_indices must be convertible to a NumPy array");
             }
-            return svo::Octree::from_voxels_cpu(
-                coordinates,
-                payload_indices_from_numpy(payload_array, coords.shape(0)),
-                options);
+            const std::vector<std::uint32_t> payload_values =
+                payload_indices_from_numpy(payload_array, coords.shape(0));
+            svo::Octree octree;
+            {
+              py::gil_scoped_release release;
+              octree = svo::Octree::from_voxels_cpu(coordinates, payload_values, options);
+            }
+            return octree;
           },
           py::arg("coords"),
           py::arg("max_depth"),
@@ -1769,8 +1794,13 @@ Args:
           [](const svo::Octree& octree, py::array points, bool return_payload_indices) {
             svo::QueryOptions options;
             options.return_payload_indices = return_payload_indices;
-            return vector_to_numpy(
-                svo::query_points(octree, points_from_numpy(points), options));
+            const std::vector<glm::vec3> point_values = points_from_numpy(points);
+            std::vector<std::int32_t> results;
+            {
+              py::gil_scoped_release release;
+              results = svo::query_points(octree, point_values, options);
+            }
+            return vector_to_numpy(results);
           },
           py::arg("points"),
           py::arg("return_payload_indices") = false,
@@ -1787,7 +1817,13 @@ Returns:
       .def(
           "query_payload_indices",
           [](const svo::Octree& octree, py::array points) {
-            return vector_to_numpy(svo::query_payload_indices(octree, points_from_numpy(points)));
+            const std::vector<glm::vec3> point_values = points_from_numpy(points);
+            std::vector<std::int32_t> results;
+            {
+              py::gil_scoped_release release;
+              results = svo::query_payload_indices(octree, point_values);
+            }
+            return vector_to_numpy(results);
           },
           py::arg("points"),
           R"pbdoc(
@@ -1810,8 +1846,12 @@ Returns:
             ray_batch.directions = rays.directions;
             ray_batch.width = rays.width;
             ray_batch.height = rays.height;
-            return raycast_batch_to_numpy(
-                svo::raycast_cpu(octree, ray_batch, options), rays.image_shaped);
+            svo::RaycastBatch results;
+            {
+              py::gil_scoped_release release;
+              results = svo::raycast_cpu(octree, ray_batch, options);
+            }
+            return raycast_batch_to_numpy(results, rays.image_shaped);
           },
           py::arg("origins"),
           py::arg("directions"),
