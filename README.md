@@ -13,7 +13,12 @@ Sparse voxel octree library with a C++20/CUDA core, pybind11 Python bindings,
 NumPy CPU APIs, CUDA traversal/rendering, and optional PyTorch CUDA autograd
 integration.
 
-![Forward render of a colored sparse sphere](docs/assets/forward_render.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/d6cd63fe-c4c8-4abd-92f6-e7ad734972bd">
+  <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/a5d8303a-4519-4af8-853d-fab9667387aa">
+
+  <img alt="Sparse Voxel Octree CUDA logo" src="https://github.com/user-attachments/assets/a5d8303a-4519-4af8-853d-fab9667387aa">
+</picture>
 
 ## Contents
 
