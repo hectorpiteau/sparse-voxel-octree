@@ -1,8 +1,8 @@
 # Sparse Voxel Octree Documentation
 
-This directory contains the project documentation in Markdown. The files are
-plain GitHub-rendered docs for now, and are structured so they can later become
-a GitHub Pages site without moving the content again.
+This directory contains the project documentation in Markdown. The files render
+directly on GitHub and are also served as a Docsify site from the same `docs/`
+directory.
 
 ## Documentation Map
 
@@ -18,6 +18,7 @@ a GitHub Pages site without moving the content again.
 - [Packaging](packaging.md): runtime wheels, source distributions, release flow, versioning policy.
 - [Troubleshooting](troubleshooting.md): diagnostics and common install/runtime errors.
 - [Examples](examples.md): scripts and workflows included in the repository.
+- [Documentation Workflow](documentation.md): how to update, preview, and publish the Docsify site.
 
 ## Current Scope
 
@@ -32,9 +33,26 @@ classified before release:
 - Minor: backward-compatible public features, or breaking changes before `1.0.0`.
 - Major: breaking changes after `1.0.0`.
 
-## Future HTML Docs
+## Docsify Site
 
-When the project is ready for an online documentation site, the recommended next
-step is to add a static documentation generator such as MkDocs or Sphinx and use
-GitHub Pages to publish this directory. The content split here is intended to
-make that migration mechanical.
+Docsify is configured through generated files in `docs/`:
+
+- `index.html`
+- `_sidebar.md`
+- `_coverpage.md`
+- `.nojekyll`
+
+Regenerate them after changing the documentation page list:
+
+```bash
+./.venv/bin/python scripts/generate_docsify.py
+```
+
+Preview locally:
+
+```bash
+npx docsify-cli serve docs
+```
+
+GitHub Pages publishing is handled by the `Docs` workflow when repository Pages
+settings allow deployment from GitHub Actions.

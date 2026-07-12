@@ -819,14 +819,14 @@ Goal: make the project usable by new developers and coding agents.
 
 ### Docsify / GitHub Pages
 
-- [ ] Add a Docsify shell for the Markdown documentation.
-- [ ] Add `docs/_sidebar.md` with the documentation navigation tree.
-- [ ] Add `docs/_coverpage.md` or a simple landing page using the existing project logo.
-- [ ] Add `docs/.nojekyll` so GitHub Pages serves Docsify assets correctly.
-- [ ] Add local preview instructions, for example `npx docsify-cli serve docs`.
-- [ ] Add a GitHub Actions workflow or Pages configuration note to publish `docs/` to GitHub Pages.
-- [ ] Verify internal links and images render correctly in both GitHub Markdown and Docsify.
-- [ ] Keep Docsify optional: no runtime package dependency and no impact on Python/C++ builds.
+- [x] Add a Docsify shell for the Markdown documentation.
+- [x] Add `docs/_sidebar.md` with the documentation navigation tree.
+- [x] Add `docs/_coverpage.md` or a simple landing page using the existing project logo.
+- [x] Add `docs/.nojekyll` so GitHub Pages serves Docsify assets correctly.
+- [x] Add local preview instructions, for example `npx docsify-cli serve docs`.
+- [x] Add a GitHub Actions workflow or Pages configuration note to publish `docs/` to GitHub Pages.
+- [x] Verify internal links and images render correctly in both GitHub Markdown and Docsify.
+- [x] Keep Docsify optional: no runtime package dependency and no impact on Python/C++ builds.
 
 ### Examples
 
@@ -842,8 +842,8 @@ Goal: make the project usable by new developers and coding agents.
 ### Acceptance criteria
 
 - [ ] New contributor can run examples.
-- [ ] Documentation can be previewed locally through Docsify.
-- [ ] Documentation can be published through GitHub Pages.
+- [x] Documentation can be previewed locally through Docsify.
+- [x] Documentation can be published through GitHub Pages.
 - [x] Coding agent has enough context to modify the project safely.
 - [x] Documentation describes what is differentiable and what is not.
 
@@ -856,6 +856,11 @@ existing Markdown files is about half a day. A clean GitHub Pages setup with
 navigation, link/image cleanup, preview instructions, and CI/publish validation
 is closer to one day. The main risk is link compatibility between GitHub's
 Markdown renderer and Docsify routing, not code complexity.
+
+Docsify implementation note: `scripts/generate_docsify.py` owns the generated
+Docsify shell files. GitHub Pages deployment is configured in
+`.github/workflows/docs.yml`; repository Pages settings still need to allow
+deployment from GitHub Actions.
 
 ---
 

@@ -1,6 +1,7 @@
 # Sparse Voxel Octree CUDA
 
 [![CI](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/ci.yml)
+[![Docs](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/docs.yml)
 [![GPU CI](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/gpu.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/gpu.yml)
 [![Publish](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/publish.yml/badge.svg)](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/publish.yml)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/hectorpiteau/sparse-voxel-octree/blob/main/pyproject.toml)
@@ -132,6 +133,19 @@ project structure.
 | Packaging, versioning, CI, release flow | [docs/packaging.md](docs/packaging.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Examples | [docs/examples.md](docs/examples.md) |
+| Documentation workflow and Docsify preview | [docs/documentation.md](docs/documentation.md) |
+
+Regenerate the Docsify shell after adding, removing, or renaming pages:
+
+```bash
+./.venv/bin/python scripts/generate_docsify.py
+```
+
+Preview the documentation site locally:
+
+```bash
+npx docsify-cli serve docs
+```
 
 ## Examples
 

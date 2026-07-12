@@ -21,6 +21,13 @@ dist/
 cmake-build-*/
 .cache/
 
+# Documentation preview/static export output.
+node_modules/
+.docsify/
+docs/.docsify/
+docs/_site/
+site/
+
 examples/data/
 third_party/glm/doc/
 third_party/pybind11/.github/
