@@ -406,6 +406,45 @@ void test_invalid_inputs() {
       "non-finite origin");
 }
 
+void test_wide_raycast_matches_octree8() {
+  svo::BuildOptions options;
+  options.max_depth = 4;
+  const std::vector<glm::ivec3> coordinates{
+      {0, 0, 0},
+      {4, 4, 4},
+      {7, 8, 9},
+      {15, 15, 15},
+  };
+  const svo::Octree octree = svo::Octree::from_voxels_cpu(coordinates, options);
+  options.branching = svo::BranchingMode::Wide4;
+  const svo::Octree wide = svo::Octree::from_voxels_cpu(coordinates, options);
+
+  const std::vector<glm::vec3> origins{
+      {-1.0f, 0.03125f, 0.03125f},
+      {-1.0f, 0.53125f, 0.59375f},
+      {2.0f, 0.96875f, 0.96875f},
+      {-1.0f, 0.2f, 0.2f},
+  };
+  const std::vector<glm::vec3> directions{
+      {1.0f, 0.0f, 0.0f},
+      {1.0f, 0.0f, 0.0f},
+      {-1.0f, 0.0f, 0.0f},
+      {1.0f, 0.0f, 0.0f},
+  };
+
+  const svo::RaycastBatch expected = svo::raycast_cpu(octree, origins, directions);
+  const svo::RaycastBatch actual = svo::raycast_cpu(wide, origins, directions);
+  require(actual.hit_mask == expected.hit_mask, "wide raycast hit masks should match");
+  require(actual.leaf_ids == expected.leaf_ids, "wide raycast leaf ids should match");
+  require(actual.depths == std::vector<std::int32_t>{4, 4, 4, -1}, "wide raycast depths should be bit depths");
+  for (std::size_t index = 0; index < actual.t.size(); ++index) {
+    if (expected.hit_mask[index] != 0u) {
+      require_near(actual.t[index], expected.t[index], kTolerance, "wide raycast t should match");
+      require_vec_near(actual.positions[index], expected.positions[index], kTolerance, "wide raycast position should match");
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -419,5 +458,6 @@ int main() {
   test_dense_reference_comparison();
   test_ray_batch_dimensions();
   test_invalid_inputs();
+  test_wide_raycast_matches_octree8();
   return 0;
 }

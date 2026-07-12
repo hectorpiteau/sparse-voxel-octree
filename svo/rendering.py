@@ -9,6 +9,14 @@ import numpy as np
 
 from ._svo import _render_volume_cpu
 
+try:
+    import torch as _torch
+except ModuleNotFoundError:
+    _torch = None
+    _TorchModuleBase = object
+else:
+    _TorchModuleBase = _torch.nn.Module
+
 
 def _is_torch_tensor(value: Any) -> bool:
     try:
@@ -169,3 +177,51 @@ def render_volume(
         )
 
     raise TypeError("renderer inputs must be all NumPy arrays or all Torch tensors")
+
+
+class VolumeRenderer(_TorchModuleBase):
+    """Small stateless ``torch.nn.Module`` wrapper around ``render_volume``."""
+
+    def __init__(
+        self,
+        tree: Any,
+        *,
+        near: float = 0.0,
+        far: float | None = None,
+        background_color: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        early_stop_transmittance: float = 1.0e-4,
+        enable_empty_space_skipping: bool = True,
+    ) -> None:
+        if _torch is None:
+            raise ModuleNotFoundError("VolumeRenderer requires PyTorch; install torch to use the renderer module")
+        super().__init__()
+        if len(background_color) != 3:
+            raise ValueError("background_color must contain exactly three values")
+        self.tree = tree
+        self.near = float(near)
+        self.far = None if far is None else float(far)
+        self.background_color = tuple(float(value) for value in background_color)
+        self.early_stop_transmittance = float(early_stop_transmittance)
+        self.enable_empty_space_skipping = bool(enable_empty_space_skipping)
+
+    def forward(self, origins: Any, directions: Any, sigma: Any, color: Any) -> tuple[Any, Any, Any]:
+        return render_volume(
+            self.tree,
+            origins,
+            directions,
+            sigma,
+            color,
+            near=self.near,
+            far=self.far,
+            background_color=self.background_color,
+            early_stop_transmittance=self.early_stop_transmittance,
+            enable_empty_space_skipping=self.enable_empty_space_skipping,
+        )
+
+    def extra_repr(self) -> str:
+        far = "None" if self.far is None else f"{self.far:g}"
+        return (
+            f"near={self.near:g}, far={far}, background_color={self.background_color}, "
+            f"early_stop_transmittance={self.early_stop_transmittance:g}, "
+            f"enable_empty_space_skipping={self.enable_empty_space_skipping}"
+        )

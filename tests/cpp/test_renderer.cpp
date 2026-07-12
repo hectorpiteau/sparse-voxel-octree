@@ -186,6 +186,53 @@ void test_invalid_inputs_fail_clearly() {
       "invalid clip range");
 }
 
+void test_wide_render_matches_octree8() {
+  svo::BuildOptions build_options;
+  build_options.max_depth = 4;
+  const std::vector<glm::ivec3> coordinates{
+      {0, 0, 0},
+      {4, 4, 4},
+      {8, 8, 8},
+      {15, 15, 15},
+  };
+  const svo::Octree octree = svo::Octree::from_voxels_cpu(coordinates, build_options);
+  build_options.branching = svo::BranchingMode::Wide4;
+  const svo::Octree wide = svo::Octree::from_voxels_cpu(coordinates, build_options);
+
+  const std::vector<float> sigma{1.0f, 2.0f, 3.0f, 4.0f};
+  const std::vector<float> color{
+      1.0f, 0.0f, 0.0f,
+      0.0f, 1.0f, 0.0f,
+      0.0f, 0.0f, 1.0f,
+      1.0f, 1.0f, 0.0f};
+  const std::vector<glm::vec3> origins{
+      {-1.0f, 0.03125f, 0.03125f},
+      {-1.0f, 0.53125f, 0.53125f},
+      {2.0f, 0.96875f, 0.96875f},
+      {-1.0f, 0.2f, 0.2f},
+  };
+  const std::vector<glm::vec3> directions{
+      {1.0f, 0.0f, 0.0f},
+      {1.0f, 0.0f, 0.0f},
+      {-1.0f, 0.0f, 0.0f},
+      {1.0f, 0.0f, 0.0f},
+  };
+
+  const svo::RenderBatch expected =
+      svo::render_volume_cpu(octree, origins, directions, sigma.data(), color.data(), sigma.size());
+  const svo::RenderBatch actual =
+      svo::render_volume_cpu(wide, origins, directions, sigma.data(), color.data(), sigma.size());
+  for (std::size_t index = 0; index < actual.rgb.size(); ++index) {
+    require_vec_near(actual.rgb[index], expected.rgb[index], 2.0e-5f, "wide render rgb");
+    require_near(actual.opacity[index], expected.opacity[index], 2.0e-5f, "wide render opacity");
+    if (std::isinf(expected.depth[index])) {
+      require(std::isinf(actual.depth[index]), "wide render infinite depth");
+    } else {
+      require_near(actual.depth[index], expected.depth[index], 2.0e-5f, "wide render depth");
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -195,5 +242,6 @@ int main() {
   test_options_clip_segment();
   test_ray_batch_shape_is_preserved();
   test_invalid_inputs_fail_clearly();
+  test_wide_render_matches_octree8();
   return 0;
 }

@@ -53,12 +53,24 @@ int count_bits(std::uint8_t value) noexcept {
   return std::popcount(value);
 }
 
+int count_bits(std::uint64_t value) noexcept {
+  return std::popcount(value);
+}
+
 int prefix_rank(std::uint8_t mask, int child_index) noexcept {
   if (child_index <= 0) {
     return 0;
   }
   const std::uint8_t lower_mask = static_cast<std::uint8_t>((1u << child_index) - 1u);
   return count_bits(static_cast<std::uint8_t>(mask & lower_mask));
+}
+
+int prefix_rank(std::uint64_t mask, int child_index) noexcept {
+  if (child_index <= 0) {
+    return 0;
+  }
+  const std::uint64_t lower_mask = (1ull << child_index) - 1ull;
+  return count_bits(mask & lower_mask);
 }
 
 Aabb child_bounds(const Aabb& bounds, int child_index) noexcept {
@@ -75,6 +87,15 @@ Aabb child_bounds(const Aabb& bounds, int child_index) noexcept {
           high_x ? bounds.max.x : mid.x,
           high_y ? bounds.max.y : mid.y,
           high_z ? bounds.max.z : mid.z}};
+}
+
+Aabb wide_child_bounds(const Aabb& bounds, int child_index) noexcept {
+  const int x = child_index & 3;
+  const int y = (child_index >> 2) & 3;
+  const int z = (child_index >> 4) & 3;
+  const glm::vec3 step = (bounds.max - bounds.min) * 0.25f;
+  const glm::vec3 child_min = bounds.min + step * glm::vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+  return {child_min, child_min + step};
 }
 
 bool intersect_axis(float origin, float direction, float min_bound, float max_bound, float& t_min, float& t_max) {
@@ -275,6 +296,92 @@ void traverse_node(
   }
 }
 
+void traverse_wide_node(
+    const Octree& octree,
+    std::size_t node_index,
+    int depth_remaining,
+    const Aabb& bounds,
+    const glm::vec3& origin,
+    const glm::vec3& direction,
+    const float* sigma,
+    const float* color,
+    const RenderOptions& options,
+    Accumulator& accum) {
+  if (node_index >= octree.wide_nodes().size() || depth_remaining <= 0 ||
+      accum.transmittance <= options.early_stop_transmittance) {
+    return;
+  }
+
+  const WideNodeDescriptor descriptor = octree.wide_nodes()[node_index];
+  const std::uint64_t child_mask = descriptor.child_mask();
+  const std::uint64_t leaf_mask = descriptor.leaf_mask();
+  const std::uint64_t internal_mask = descriptor.internal_child_mask();
+  std::vector<SegmentCandidate> candidates;
+  candidates.reserve(64);
+
+  for (std::uint64_t active_mask = child_mask; active_mask != 0u; active_mask &= active_mask - 1u) {
+    const int child_index = std::countr_zero(active_mask);
+    const std::uint64_t child_bit = 1ull << child_index;
+
+    const Aabb child = wide_child_bounds(bounds, child_index);
+    float t_near = 0.0f;
+    float t_far = 0.0f;
+    if (!intersect_aabb(child, origin, direction, t_near, t_far)) {
+      continue;
+    }
+    if (std::min(t_far, options.far_plane) <= std::max({t_near, options.near_plane, 0.0f})) {
+      continue;
+    }
+
+    SegmentCandidate candidate;
+    candidate.leaf = (leaf_mask & child_bit) != 0u;
+    candidate.bounds = child;
+    candidate.t_near = t_near;
+    candidate.t_far = t_far;
+    if (candidate.leaf) {
+      candidate.leaf_id = static_cast<std::int32_t>(
+          static_cast<std::size_t>(descriptor.payload_base()) +
+          static_cast<std::size_t>(prefix_rank(leaf_mask, child_index)));
+      candidate.depth = octree.max_depth() - depth_remaining + 2;
+    } else {
+      candidate.node_index = static_cast<std::size_t>(descriptor.child_base()) +
+          static_cast<std::size_t>(prefix_rank(internal_mask, child_index));
+      candidate.depth_remaining = depth_remaining - 2;
+    }
+    candidates.push_back(candidate);
+  }
+
+  std::sort(candidates.begin(), candidates.end(), [&](const SegmentCandidate& lhs, const SegmentCandidate& rhs) {
+    const float lhs_key = segment_sort_key(lhs, options);
+    const float rhs_key = segment_sort_key(rhs, options);
+    if (std::fabs(lhs_key - rhs_key) > kEpsilon) {
+      return lhs_key < rhs_key;
+    }
+    return lhs.leaf_id < rhs.leaf_id;
+  });
+
+  for (const SegmentCandidate& candidate : candidates) {
+    if (accum.transmittance <= options.early_stop_transmittance) {
+      break;
+    }
+    if (candidate.leaf) {
+      composite_leaf(octree, sigma, color, candidate, options, accum);
+    } else {
+      traverse_wide_node(
+          octree,
+          candidate.node_index,
+          candidate.depth_remaining,
+          candidate.bounds,
+          origin,
+          direction,
+          sigma,
+          color,
+          options,
+          accum);
+    }
+  }
+}
+
 void render_one(
     const Octree& octree,
     const glm::vec3& origin,
@@ -291,7 +398,7 @@ void render_one(
   const glm::vec3 normalized = normalized_direction(direction);
 
   Accumulator accum;
-  if (!octree.nodes().empty()) {
+  if (octree.num_nodes() != 0) {
     const Aabb root{octree.root_bounds()[0], octree.root_bounds()[1]};
     float root_t_near = 0.0f;
     float root_t_far = 0.0f;
@@ -307,17 +414,31 @@ void render_one(
         root_leaf.t_far = root_t_far;
         composite_leaf(octree, sigma, color, root_leaf, options, accum);
       } else {
-        traverse_node(
-            octree,
-            0,
-            octree.max_depth(),
-            root,
-            origin,
-            normalized,
-            sigma,
-            color,
-            options,
-            accum);
+        if (octree.branching() == BranchingMode::Wide4) {
+          traverse_wide_node(
+              octree,
+              0,
+              octree.max_depth(),
+              root,
+              origin,
+              normalized,
+              sigma,
+              color,
+              options,
+              accum);
+        } else {
+          traverse_node(
+              octree,
+              0,
+              octree.max_depth(),
+              root,
+              origin,
+              normalized,
+              sigma,
+              color,
+              options,
+              accum);
+        }
       }
     }
   }

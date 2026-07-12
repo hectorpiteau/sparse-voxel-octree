@@ -92,6 +92,40 @@ std::vector<std::int32_t> query_points_cuda_reference(
 #endif
 }
 
+std::vector<std::int32_t> query_points_wide_cuda_reference(
+    const svo::Octree& octree,
+    const std::vector<glm::vec3>& points,
+    const svo::QueryOptions& options = {}) {
+#if SVO_ENABLE_CUDA
+  svo::DeviceBuffer<svo::WideNodeDescriptor> device_nodes =
+      svo::DeviceBuffer<svo::WideNodeDescriptor>::from_host(octree.wide_nodes(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::uint32_t> device_leaf_payload_indices =
+      svo::DeviceBuffer<std::uint32_t>::from_host(octree.leaf_payload_indices(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_points =
+      svo::DeviceBuffer<glm::vec3>::from_host(points, svo::Device::CUDA);
+  svo::DeviceBuffer<std::int32_t> device_results(points.size(), svo::Device::CUDA);
+
+  svo::query_points_wide_cuda(
+      device_nodes.data(),
+      device_nodes.size(),
+      device_leaf_payload_indices.data(),
+      device_leaf_payload_indices.size(),
+      octree.max_depth(),
+      octree.root_bounds(),
+      device_points.data(),
+      device_results.data(),
+      device_results.size(),
+      options);
+
+  return device_results.to_host();
+#else
+  (void)octree;
+  (void)points;
+  (void)options;
+  return {};
+#endif
+}
+
 
 std::vector<std::int32_t> query_points_cuda_on_stream(
     const svo::Octree& octree,
@@ -294,6 +328,38 @@ void test_empty_and_zero_count_queries() {
 #endif
 }
 
+void test_wide_query_matches_cpu() {
+#if SVO_ENABLE_CUDA
+  svo::BuildOptions build_options;
+  build_options.max_depth = 4;
+  build_options.branching = svo::BranchingMode::Wide4;
+  const svo::Octree octree = svo::Octree::from_voxels_cpu(
+      {glm::ivec3{0, 0, 0}, glm::ivec3{1, 2, 3}, glm::ivec3{4, 4, 4}, glm::ivec3{15, 15, 15}},
+      {10u, 11u, 12u, 13u},
+      build_options);
+
+  const std::vector<glm::vec3> points{
+      voxel_center_point(16, {0, 0, 0}),
+      voxel_center_point(16, {1, 2, 3}),
+      voxel_center_point(16, {4, 4, 4}),
+      voxel_center_point(16, {15, 15, 15}),
+      voxel_center_point(16, {2, 2, 2}),
+      {1.0f, 0.5f, 0.5f},
+  };
+
+  require(
+      query_points_wide_cuda_reference(octree, points) == svo::query_points(octree, points),
+      "wide CUDA query should match wide CPU query");
+
+  svo::QueryOptions payload_options;
+  payload_options.return_payload_indices = true;
+  require(
+      query_points_wide_cuda_reference(octree, points, payload_options) ==
+          svo::query_points(octree, points, payload_options),
+      "wide CUDA payload query should match wide CPU query");
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -301,5 +367,6 @@ int main() {
   test_grid_shaped_batch();
   test_random_tree_batch();
   test_empty_and_zero_count_queries();
+  test_wide_query_matches_cpu();
   return 0;
 }

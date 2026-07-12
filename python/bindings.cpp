@@ -55,6 +55,16 @@ svo::RootBounds root_bounds_from_python(py::object root_bounds_obj) {
   };
 }
 
+svo::BranchingMode branching_from_python(const std::string& branching) {
+  if (branching == "octree8") {
+    return svo::BranchingMode::Octree8;
+  }
+  if (branching == "wide4") {
+    return svo::BranchingMode::Wide4;
+  }
+  throw py::value_error("branching must be 'octree8' or 'wide4'");
+}
+
 std::vector<glm::ivec3> coordinates_from_numpy(const py::array& array) {
   if (array.ndim() != 2 || array.shape(1) != 3) {
     throw py::value_error("coords must have shape (N, 3)");
@@ -895,6 +905,7 @@ class CudaOctreeOwner {
       : host_octree_(host_octree),
         device_index_(current_cuda_device()),
         device_nodes_(svo::DeviceBuffer<svo::NodeDescriptor>::from_host(host_octree.nodes(), svo::Device::CUDA)),
+        device_wide_nodes_(svo::DeviceBuffer<svo::WideNodeDescriptor>::from_host(host_octree.wide_nodes(), svo::Device::CUDA)),
         device_leaf_payload_indices_(svo::DeviceBuffer<std::uint32_t>::from_host(
             host_octree.leaf_payload_indices(),
             svo::Device::CUDA)) {}
@@ -930,17 +941,31 @@ class CudaOctreeOwner {
 
     {
       py::gil_scoped_release release;
-      svo::query_points_cuda(
-          device_nodes_.data(),
-          device_nodes_.size(),
-          device_leaf_payload_indices_.data(),
-          device_leaf_payload_indices_.size(),
-          host_octree_.max_depth(),
-          host_octree_.root_bounds(),
-          device_points.data(),
-          device_results.data(),
-          device_results.size(),
-          options);
+      if (host_octree_.branching() == svo::BranchingMode::Wide4) {
+        svo::query_points_wide_cuda(
+            device_wide_nodes_.data(),
+            device_wide_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            device_points.data(),
+            device_results.data(),
+            device_results.size(),
+            options);
+      } else {
+        svo::query_points_cuda(
+            device_nodes_.data(),
+            device_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            device_points.data(),
+            device_results.data(),
+            device_results.size(),
+            options);
+      }
     }
 
     return vector_to_numpy(device_results.to_host());
@@ -973,18 +998,33 @@ class CudaOctreeOwner {
     CudaDeviceGuard guard(device_index_);
     {
       py::gil_scoped_release release;
-      svo::query_points_cuda(
-          device_nodes_.data(),
-          device_nodes_.size(),
-          device_leaf_payload_indices_.data(),
-          device_leaf_payload_indices_.size(),
-          host_octree_.max_depth(),
-          host_octree_.root_bounds(),
-          point_data,
-          result_data,
-          count,
-          options,
-          stream);
+      if (host_octree_.branching() == svo::BranchingMode::Wide4) {
+        svo::query_points_wide_cuda(
+            device_wide_nodes_.data(),
+            device_wide_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            point_data,
+            result_data,
+            count,
+            options,
+            stream);
+      } else {
+        svo::query_points_cuda(
+            device_nodes_.data(),
+            device_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            point_data,
+            result_data,
+            count,
+            options,
+            stream);
+      }
     }
 
     return results;
@@ -1021,22 +1061,41 @@ class CudaOctreeOwner {
 
     {
       py::gil_scoped_release release;
-      svo::raycast_cuda(
-          device_nodes_.data(),
-          device_nodes_.size(),
-          device_leaf_payload_indices_.data(),
-          device_leaf_payload_indices_.size(),
-          host_octree_.max_depth(),
-          host_octree_.root_bounds(),
-          device_origins.data(),
-          device_directions.data(),
-          device_hit_mask.data(),
-          device_leaf_ids.data(),
-          device_t.data(),
-          device_positions.data(),
-          device_depths.data(),
-          rays.origins.size(),
-          options);
+      if (host_octree_.branching() == svo::BranchingMode::Wide4) {
+        svo::raycast_wide_cuda(
+            device_wide_nodes_.data(),
+            device_wide_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            device_origins.data(),
+            device_directions.data(),
+            device_hit_mask.data(),
+            device_leaf_ids.data(),
+            device_t.data(),
+            device_positions.data(),
+            device_depths.data(),
+            rays.origins.size(),
+            options);
+      } else {
+        svo::raycast_cuda(
+            device_nodes_.data(),
+            device_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            device_origins.data(),
+            device_directions.data(),
+            device_hit_mask.data(),
+            device_leaf_ids.data(),
+            device_t.data(),
+            device_positions.data(),
+            device_depths.data(),
+            rays.origins.size(),
+            options);
+      }
     }
 
     svo::RaycastBatch results;
@@ -1096,23 +1155,43 @@ class CudaOctreeOwner {
     CudaDeviceGuard guard(device_index_);
     {
       py::gil_scoped_release release;
-      svo::raycast_cuda(
-          device_nodes_.data(),
-          device_nodes_.size(),
-          device_leaf_payload_indices_.data(),
-          device_leaf_payload_indices_.size(),
-          host_octree_.max_depth(),
-          host_octree_.root_bounds(),
-          origin_data,
-          direction_data,
-          hit_mask_data,
-          leaf_id_data,
-          t_data,
-          position_data,
-          depth_data,
-          count,
-          options,
-          stream);
+      if (host_octree_.branching() == svo::BranchingMode::Wide4) {
+        svo::raycast_wide_cuda(
+            device_wide_nodes_.data(),
+            device_wide_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            origin_data,
+            direction_data,
+            hit_mask_data,
+            leaf_id_data,
+            t_data,
+            position_data,
+            depth_data,
+            count,
+            options,
+            stream);
+      } else {
+        svo::raycast_cuda(
+            device_nodes_.data(),
+            device_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            origin_data,
+            direction_data,
+            hit_mask_data,
+            leaf_id_data,
+            t_data,
+            position_data,
+            depth_data,
+            count,
+            options,
+            stream);
+      }
     }
 
     return py::make_tuple(hit_mask, leaf_ids, t, positions, depths);
@@ -1120,6 +1199,9 @@ class CudaOctreeOwner {
 
 
   py::object sample_trilinear_torch(py::object points, py::object payload, double fill_value) const {
+    if (host_octree_.branching() == svo::BranchingMode::Wide4) {
+      throw py::type_error("trilinear interpolation does not support wide4 trees yet");
+    }
     py::object torch = import_torch();
     check_torch_float32_tensor(torch, points, "points", device_index_);
     check_torch_floating_tensor(torch, payload, "payload", device_index_);
@@ -1194,6 +1276,9 @@ class CudaOctreeOwner {
       py::object payload,
       py::object grad_outputs,
       double fill_value) const {
+    if (host_octree_.branching() == svo::BranchingMode::Wide4) {
+      throw py::type_error("trilinear interpolation does not support wide4 trees yet");
+    }
     py::object torch = import_torch();
     check_torch_float32_tensor(torch, points, "points", device_index_);
     check_torch_floating_tensor(torch, payload, "payload", device_index_);
@@ -1340,25 +1425,47 @@ class CudaOctreeOwner {
     CudaDeviceGuard guard(device_index_);
     {
       py::gil_scoped_release release;
-      svo::render_volume_backward_cuda(
-          device_nodes_.data(),
-          device_nodes_.size(),
-          device_leaf_payload_indices_.data(),
-          device_leaf_payload_indices_.size(),
-          host_octree_.max_depth(),
-          host_octree_.root_bounds(),
-          origin_data,
-          direction_data,
-          sigma_data,
-          color_data,
-          grad_rgb_data,
-          grad_opacity_data,
-          grad_sigma_data,
-          grad_color_data,
-          count,
-          payload_rows,
-          options,
-          stream);
+      if (host_octree_.branching() == svo::BranchingMode::Wide4) {
+        svo::render_volume_backward_wide_cuda(
+            device_wide_nodes_.data(),
+            device_wide_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            origin_data,
+            direction_data,
+            sigma_data,
+            color_data,
+            grad_rgb_data,
+            grad_opacity_data,
+            grad_sigma_data,
+            grad_color_data,
+            count,
+            payload_rows,
+            options,
+            stream);
+      } else {
+        svo::render_volume_backward_cuda(
+            device_nodes_.data(),
+            device_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            origin_data,
+            direction_data,
+            sigma_data,
+            color_data,
+            grad_rgb_data,
+            grad_opacity_data,
+            grad_sigma_data,
+            grad_color_data,
+            count,
+            payload_rows,
+            options,
+            stream);
+      }
     }
 
     return py::make_tuple(grad_sigma, grad_color);
@@ -1435,24 +1542,45 @@ class CudaOctreeOwner {
     CudaDeviceGuard guard(device_index_);
     {
       py::gil_scoped_release release;
-      svo::render_volume_cuda(
-          device_nodes_.data(),
-          device_nodes_.size(),
-          device_leaf_payload_indices_.data(),
-          device_leaf_payload_indices_.size(),
-          host_octree_.max_depth(),
-          host_octree_.root_bounds(),
-          origin_data,
-          direction_data,
-          sigma_data,
-          color_data,
-          rgb_data,
-          depth_data,
-          opacity_data,
-          count,
-          payload_rows,
-          options,
-          stream);
+      if (host_octree_.branching() == svo::BranchingMode::Wide4) {
+        svo::render_volume_wide_cuda(
+            device_wide_nodes_.data(),
+            device_wide_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            origin_data,
+            direction_data,
+            sigma_data,
+            color_data,
+            rgb_data,
+            depth_data,
+            opacity_data,
+            count,
+            payload_rows,
+            options,
+            stream);
+      } else {
+        svo::render_volume_cuda(
+            device_nodes_.data(),
+            device_nodes_.size(),
+            device_leaf_payload_indices_.data(),
+            device_leaf_payload_indices_.size(),
+            host_octree_.max_depth(),
+            host_octree_.root_bounds(),
+            origin_data,
+            direction_data,
+            sigma_data,
+            color_data,
+            rgb_data,
+            depth_data,
+            opacity_data,
+            count,
+            payload_rows,
+            options,
+            stream);
+      }
     }
 
     return py::make_tuple(rgb, depth, opacity);
@@ -1471,13 +1599,16 @@ class CudaOctreeOwner {
   svo::Octree host_octree_;
   int device_index_ = 0;
   svo::DeviceBuffer<svo::NodeDescriptor> device_nodes_;
+  svo::DeviceBuffer<svo::WideNodeDescriptor> device_wide_nodes_;
   svo::DeviceBuffer<std::uint32_t> device_leaf_payload_indices_;
 };
 
 std::string cuda_octree_repr(const CudaOctreeOwner& octree) {
   std::ostringstream stream;
   stream << "CudaOctree(max_depth=" << octree.max_depth() << ", num_nodes=" << octree.num_nodes()
-         << ", num_leaves=" << octree.num_leaves() << ", device='cuda:" << octree.device_index() << "')";
+         << ", num_leaves=" << octree.num_leaves() << ", branching='"
+         << svo::branching_mode_name(octree.host_octree().branching()) << "', device='cuda:"
+         << octree.device_index() << "')";
   return stream.str();
 }
 #endif
@@ -1485,7 +1616,8 @@ std::string cuda_octree_repr(const CudaOctreeOwner& octree) {
 std::string octree_repr(const svo::Octree& octree) {
   std::ostringstream stream;
   stream << "Octree(max_depth=" << octree.max_depth() << ", num_nodes=" << octree.num_nodes()
-         << ", num_leaves=" << octree.num_leaves() << ", device='" << svo::device_name(octree.device())
+         << ", num_leaves=" << octree.num_leaves() << ", branching='"
+         << svo::branching_mode_name(octree.branching()) << "', device='" << svo::device_name(octree.device())
          << "')";
   return stream.str();
 }
@@ -1501,6 +1633,11 @@ PYBIND11_MODULE(_svo, module) {
   py::enum_<svo::CameraConvention>(module, "CameraConvention")
       .value("OpenGL", svo::CameraConvention::OpenGL)
       .value("ComputerVision", svo::CameraConvention::ComputerVision)
+      .export_values();
+
+  py::enum_<svo::BranchingMode>(module, "BranchingMode")
+      .value("Octree8", svo::BranchingMode::Octree8)
+      .value("Wide4", svo::BranchingMode::Wide4)
       .export_values();
 
   py::class_<svo::CameraIntrinsics>(module, "CameraIntrinsics")
@@ -1577,7 +1714,12 @@ PYBIND11_MODULE(_svo, module) {
   py::class_<svo::Octree>(module, "Octree", "Sparse voxel octree CPU wrapper.")
       .def_static(
           "from_voxels",
-          [](py::array coords, int max_depth, const std::string& device, py::object root_bounds, py::object payload_indices) {
+          [](py::array coords,
+             int max_depth,
+             const std::string& device,
+             py::object root_bounds,
+             py::object payload_indices,
+             const std::string& branching) {
             if (device != "cpu") {
               throw py::value_error(
                   "Octree.from_voxels currently supports only device='cpu'; build on CPU and use "
@@ -1588,6 +1730,7 @@ PYBIND11_MODULE(_svo, module) {
             options.max_depth = max_depth;
             options.device = svo::Device::CPU;
             options.root_bounds = root_bounds_from_python(root_bounds);
+            options.branching = branching_from_python(branching);
 
             const std::vector<glm::ivec3> coordinates = coordinates_from_numpy(coords);
             if (payload_indices.is_none()) {
@@ -1608,6 +1751,7 @@ PYBIND11_MODULE(_svo, module) {
           py::arg("device") = "cpu",
           py::arg("root_bounds") = py::none(),
           py::arg("payload_indices") = py::none(),
+          py::arg("branching") = "octree8",
           R"pbdoc(
 Build a CPU octree from occupied voxel coordinates.
 
@@ -1617,6 +1761,7 @@ Args:
     device: Currently only "cpu" is supported.
     root_bounds: Optional array with shape (2, 3). Defaults to [0, 1]^3.
     payload_indices: Optional int array with shape (N,) mapping each input voxel to an external payload row.
+    branching: "octree8" for the classic 2x2x2 tree or "wide4" for 4x4x4 nodes.
 )pbdoc")
       .def(
           "query",
@@ -1760,6 +1905,9 @@ keep octree topology resident on the GPU.
           "device",
           [](const svo::Octree& octree) { return std::string(svo::device_name(octree.device())); })
       .def_property_readonly(
+          "branching",
+          [](const svo::Octree& octree) { return std::string(svo::branching_mode_name(octree.branching())); })
+      .def_property_readonly(
           "root_bounds",
           [](const svo::Octree& octree) { return root_bounds_to_numpy(octree.root_bounds()); })
       .def_property_readonly(
@@ -1876,6 +2024,11 @@ Returns:
       .def_property_readonly("num_leaves", &CudaOctreeOwner::num_leaves)
       .def_property_readonly("device", [](const CudaOctreeOwner&) { return std::string("cuda"); })
       .def_property_readonly("device_index", &CudaOctreeOwner::device_index)
+      .def_property_readonly(
+          "branching",
+          [](const CudaOctreeOwner& octree) {
+            return std::string(svo::branching_mode_name(octree.host_octree().branching()));
+          })
       .def_property_readonly(
           "root_bounds",
           [](const CudaOctreeOwner& octree) { return root_bounds_to_numpy(octree.root_bounds()); })

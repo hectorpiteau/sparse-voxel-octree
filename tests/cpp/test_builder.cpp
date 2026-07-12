@@ -93,6 +93,40 @@ int main() {
   {
     svo::BuildOptions options;
     options.max_depth = 2;
+    options.branching = svo::BranchingMode::Wide4;
+
+    const svo::Octree octree =
+        svo::Octree::from_voxels_cpu({glm::ivec3{0, 0, 0}, glm::ivec3{3, 3, 3}}, options);
+    require(octree.branching() == svo::BranchingMode::Wide4, "wide tree should report wide4 branching");
+    require(octree.nodes().empty(), "wide tree should not populate octree8 nodes");
+    require(octree.wide_nodes().size() == 1, "depth 2 wide tree should fit in one root node");
+    require(octree.num_nodes() == 1, "wide num_nodes should report wide node count");
+    require(octree.num_leaves() == 2, "wide tree should keep two leaves");
+    require(octree.wide_nodes().front().child_mask() == ((1ull << 0) | (1ull << 63)), "wide root child mask");
+    require(octree.wide_nodes().front().leaf_mask() == ((1ull << 0) | (1ull << 63)), "wide root leaf mask");
+  }
+
+  {
+    svo::BuildOptions options;
+    options.max_depth = 4;
+    options.branching = svo::BranchingMode::Wide4;
+
+    const svo::Octree wide = svo::Octree::from_voxels_cpu({glm::ivec3{0, 0, 0}, glm::ivec3{15, 15, 15}}, options);
+    options.branching = svo::BranchingMode::Octree8;
+    const svo::Octree octree = svo::Octree::from_voxels_cpu({glm::ivec3{0, 0, 0}, glm::ivec3{15, 15, 15}}, options);
+    require(wide.num_nodes() < octree.num_nodes(), "wide nodes should reduce traversal node count for separated voxels");
+  }
+
+  {
+    svo::BuildOptions options;
+    options.max_depth = 3;
+    options.branching = svo::BranchingMode::Wide4;
+    require_validation_error({glm::ivec3{0, 0, 0}}, options, "even max_depth");
+  }
+
+  {
+    svo::BuildOptions options;
+    options.max_depth = 2;
 
     const svo::Octree octree = svo::Octree::from_voxels_cpu(
         {glm::ivec3{1, 1, 1}, glm::ivec3{1, 1, 1}, glm::ivec3{1, 1, 1}},

@@ -54,6 +54,22 @@ Which active cells should be sampled along this camera ray?
 
 The actual voxel payload should live in separate buffers or tensors.
 
+## Branching modes
+
+`Octree` supports two tree-level topology layouts:
+
+- `branching="octree8"` is the default 2x2x2 octree path. It uses the original compact 64-bit node descriptor and supports all current features, including trilinear interpolation.
+- `branching="wide4"` uses 4x4x4 nodes with 64-bit child and leaf masks plus compact child/payload spans. It consumes two coordinate bits per axis per level, so `max_depth` must be even. Query, raycast, forward rendering, and CUDA/Torch backward rendering dispatch to dedicated wide kernels.
+
+Example:
+
+```python
+tree = svo.Octree.from_voxels(coords, max_depth=8, branching="wide4")
+assert tree.branching == "wide4"
+```
+
+Choose `wide4` when lower traversal depth matters and the scene is sparse enough that wider node descriptors pay for themselves. Keep `octree8` when memory density is the priority, when `max_depth` is odd, or when using interpolation features that have not been generalized to wide nodes yet.
+
 ## Forward renderer example
 
 The forward renderer can render external density/color payloads indexed by the octree. This example builds a sparse sphere, colors it with smooth sinusoidal payloads, generates camera rays, and writes a PNG without extra visualization dependencies. Use `--device auto` to use CUDA Torch rendering when available and CPU otherwise.
@@ -71,6 +87,7 @@ The forward renderer can render external density/color payloads indexed by the o
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv sync --extra viewer
 ./.venv/bin/python examples/python/realtime_viewer.py --device auto
+./.venv/bin/python examples/python/realtime_viewer.py --device cuda --branching wide4
 ```
 
 Controls: left-click drag orbits the camera around `(0, 0, 0)`, the mouse wheel zooms, `R` resets the camera, and `Q` or `Esc` exits. FPS and frame time are displayed in the top-left corner. The display loop is not frame-capped; GPU-to-CPU readback is still required to show the rendered image in the pygame window.
@@ -414,51 +431,47 @@ The differentiable renderer should be exposed as a normal PyTorch module.
 
 ```python
 import torch
-import svo.torch as svo_torch
+import svo
 
-tree = svo_torch.Octree.from_voxels(coords, max_depth=10)
+tree = svo.Octree.from_voxels(coords, max_depth=10)
+cuda_tree = tree.to("cuda")
 
-renderer = svo_torch.OctreeRenderer(
-    tree,
-    brick_size=8,
-    step_mode="adaptive",
+renderer = svo.VolumeRenderer(cuda_tree)
+
+sigma = torch.nn.Parameter(
+    torch.ones(tree.num_leaves, device="cuda")
 )
-
-density = torch.nn.Parameter(
-    torch.zeros(tree.num_bricks, 8, 8, 8, 1, device="cuda")
-)
-
 color = torch.nn.Parameter(
-    torch.rand(tree.num_bricks, 8, 8, 8, 3, device="cuda")
+    torch.rand(tree.num_leaves, 3, device="cuda")
 )
 
-camera = svo_torch.Camera.look_at(
-    eye=[0.0, 0.0, 3.0],
+camera = svo.Camera.look_at(
+    origin=[0.0, 0.0, 3.0],
     target=[0.0, 0.0, 0.0],
     up=[0.0, 1.0, 0.0],
-    fov_degrees=60.0,
-)
-
-image, aux = renderer(
-    density=density,
-    color=color,
-    camera=camera,
     width=800,
     height=800,
+    vertical_fov_y_degrees=60.0,
 )
+origins_np, directions_np = camera.generate_rays()
+origins = torch.as_tensor(origins_np, device="cuda")
+directions = torch.as_tensor(directions_np, device="cuda")
 
-loss = image.mean()
+rgb, depth, opacity = renderer(origins, directions, sigma, color)
+
+loss = rgb.mean() + 0.001 * opacity.mean()
 loss.backward()
 ```
 
 The renderer should allow custom losses in normal PyTorch.
 
 ```python
-pred, aux = renderer(density, color, camera, width=W, height=H)
+pred, _depth, opacity = renderer(origins, directions, sigma, color)
 
 loss = (
     torch.nn.functional.mse_loss(pred, target)
-    + 0.001 * density.abs().mean()
+    + 0.001 * sigma.abs().mean()
+    + 0.01 * opacity.mean()
 )
 
 loss.backward()

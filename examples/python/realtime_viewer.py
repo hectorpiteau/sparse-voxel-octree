@@ -11,6 +11,7 @@ Install viewer dependency:
 
 Run:
     ./.venv/bin/python examples/python/realtime_viewer.py --device auto
+    ./.venv/bin/python examples/python/realtime_viewer.py --device cuda --branching wide4
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import numpy as np
 import svo
 
 RenderDevice = Literal["auto", "cpu", "cuda"]
+BranchingMode = Literal["octree8", "wide4"]
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,8 @@ class ScenePayload:
     sigma_np: np.ndarray
     color_np: np.ndarray
     num_leaves: int
+    num_nodes: int
+    branching: str
 
 
 @dataclass
@@ -92,7 +96,7 @@ def resolve_device(requested: RenderDevice) -> str:
     return "cuda" if torch_cuda_available() else "cpu"
 
 
-def build_sphere_scene(grid_size: int, radius: float) -> ScenePayload:
+def build_sphere_scene(grid_size: int, radius: float, branching: BranchingMode) -> ScenePayload:
     inv_grid = 1.0 / float(grid_size)
     coords: list[tuple[int, int, int]] = []
     sigma_values: list[float] = []
@@ -127,12 +131,15 @@ def build_sphere_scene(grid_size: int, radius: float) -> ScenePayload:
         max_depth=int(math.log2(grid_size)),
         root_bounds=root_bounds,
         payload_indices=payload_indices,
+        branching=branching,
     )
     return ScenePayload(
         tree=tree,
         sigma_np=np.asarray(sigma_values, dtype=np.float32),
         color_np=np.asarray(color_values, dtype=np.float32),
         num_leaves=len(coords_np),
+        num_nodes=tree.num_nodes,
+        branching=tree.branching,
     )
 
 
@@ -218,7 +225,7 @@ def draw_overlay(
 ) -> None:
     lines = [
         f"{fps:6.1f} FPS  {frame_ms:5.2f} ms",
-        f"backend: {device}   leaves: {scene.num_leaves}",
+        f"backend: {device}   branching: {scene.branching}   nodes: {scene.num_nodes}   leaves: {scene.num_leaves}",
         "drag: orbit   wheel: zoom   R: reset   Q/Esc: quit",
     ]
     pad = 8
@@ -251,6 +258,12 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="Render backend. auto uses CUDA Torch when available, otherwise CPU.",
     )
+    parser.add_argument(
+        "--branching",
+        choices=("octree8", "wide4"),
+        default="octree8",
+        help="Tree topology to build. wide4 requires an even log2(grid-size).",
+    )
     return parser.parse_args()
 
 
@@ -262,6 +275,9 @@ def main() -> None:
         raise ValueError("grid-size must be a positive power of two")
     if args.radius <= 0.0:
         raise ValueError("radius must be positive")
+    max_depth = int(math.log2(args.grid_size))
+    if args.branching == "wide4" and (max_depth % 2) != 0:
+        raise ValueError("wide4 requires an even log2(grid-size); use e.g. --grid-size 16, 64, or 256")
 
     device = resolve_device(args.device)
 
@@ -272,7 +288,7 @@ def main() -> None:
             "pygame is required for the real-time viewer; install it with `uv sync --extra viewer`"
         ) from error
 
-    scene = build_sphere_scene(args.grid_size, args.radius)
+    scene = build_sphere_scene(args.grid_size, args.radius, args.branching)
     cuda_resources = prepare_cuda_scene(scene) if device == "cuda" else None
 
     pygame.init()

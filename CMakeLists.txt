@@ -81,6 +81,9 @@ if(SVO_ENABLE_CUDA)
 
   add_executable(svo_raycast_benchmark benchmarks/cpp/raycast_benchmark.cpp)
   target_link_libraries(svo_raycast_benchmark PRIVATE svo_core)
+
+  add_executable(svo_render_benchmark benchmarks/cpp/render_benchmark.cpp)
+  target_link_libraries(svo_render_benchmark PRIVATE svo_core)
 endif()
 
 install(

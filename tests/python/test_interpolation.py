@@ -85,6 +85,12 @@ def test_sample_trilinear_rejects_bad_numpy_inputs() -> None:
         svo.sample_trilinear(tree, np.zeros((1, 3), dtype=np.float32), np.zeros((2,), dtype=np.float32))
 
 
+def test_sample_trilinear_rejects_wide4_tree() -> None:
+    tree = svo.Octree.from_voxels(np.array([[0, 0, 0]], dtype=np.int32), max_depth=2, branching="wide4")
+    with pytest.raises(svo.ValidationError, match="wide4"):
+        svo.sample_trilinear(tree, np.zeros((1, 3), dtype=np.float32), np.zeros((1,), dtype=np.float32))
+
+
 def test_sample_trilinear_torch_cuda_forward_and_backward() -> None:
     torch = _torch_cuda()
     tree = _dense_depth_one_tree()

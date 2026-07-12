@@ -223,6 +223,42 @@ void test_sphere_occupancy_query() {
   }
 }
 
+void test_wide_query_matches_octree8() {
+  svo::BuildOptions options;
+  options.max_depth = 4;
+
+  const std::vector<glm::ivec3> coordinates{
+      {0, 0, 0},
+      {1, 2, 3},
+      {4, 4, 4},
+      {7, 8, 9},
+      {15, 15, 15},
+  };
+  const std::vector<std::uint32_t> payload_indices{10u, 11u, 12u, 13u, 14u};
+
+  const svo::Octree octree = svo::Octree::from_voxels_cpu(coordinates, payload_indices, options);
+  options.branching = svo::BranchingMode::Wide4;
+  const svo::Octree wide = svo::Octree::from_voxels_cpu(coordinates, payload_indices, options);
+
+  const std::vector<glm::vec3> points{
+      voxel_center_point(16, {0, 0, 0}),
+      voxel_center_point(16, {1, 2, 3}),
+      voxel_center_point(16, {4, 4, 4}),
+      voxel_center_point(16, {7, 8, 9}),
+      voxel_center_point(16, {15, 15, 15}),
+      voxel_center_point(16, {2, 2, 2}),
+      {0.25f, 0.25f, 0.25f},
+      {1.0f, 0.5f, 0.5f},
+  };
+
+  require(svo::query_points(wide, points) == svo::query_points(octree, points), "wide query leaf ids should match octree8");
+  svo::QueryOptions payload_options;
+  payload_options.return_payload_indices = true;
+  require(
+      svo::query_points(wide, points, payload_options) == svo::query_points(octree, points, payload_options),
+      "wide query payload ids should match octree8");
+}
+
 }  // namespace
 
 int main() {
@@ -230,5 +266,6 @@ int main() {
   test_custom_payload_index_query();
   test_random_reference_query();
   test_sphere_occupancy_query();
+  test_wide_query_matches_octree8();
   return 0;
 }

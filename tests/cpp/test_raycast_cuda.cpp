@@ -131,6 +131,58 @@ CudaRaycastResults raycast_cuda_reference(
 #endif
 }
 
+CudaRaycastResults raycast_wide_cuda_reference(
+    const svo::Octree& octree,
+    const std::vector<glm::vec3>& origins,
+    const std::vector<glm::vec3>& directions,
+    const svo::RaycastOptions& options = {}) {
+#if SVO_ENABLE_CUDA
+  svo::DeviceBuffer<svo::WideNodeDescriptor> device_nodes =
+      svo::DeviceBuffer<svo::WideNodeDescriptor>::from_host(octree.wide_nodes(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::uint32_t> device_leaf_payload_indices =
+      svo::DeviceBuffer<std::uint32_t>::from_host(octree.leaf_payload_indices(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_origins =
+      svo::DeviceBuffer<glm::vec3>::from_host(origins, svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_directions =
+      svo::DeviceBuffer<glm::vec3>::from_host(directions, svo::Device::CUDA);
+  svo::DeviceBuffer<std::uint8_t> device_hit_mask(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::int32_t> device_leaf_ids(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> device_t(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> device_positions(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<std::int32_t> device_depths(origins.size(), svo::Device::CUDA);
+
+  svo::raycast_wide_cuda(
+      device_nodes.data(),
+      device_nodes.size(),
+      device_leaf_payload_indices.data(),
+      device_leaf_payload_indices.size(),
+      octree.max_depth(),
+      octree.root_bounds(),
+      device_origins.data(),
+      device_directions.data(),
+      device_hit_mask.data(),
+      device_leaf_ids.data(),
+      device_t.data(),
+      device_positions.data(),
+      device_depths.data(),
+      origins.size(),
+      options);
+
+  return {
+      device_hit_mask.to_host(),
+      device_leaf_ids.to_host(),
+      device_t.to_host(),
+      device_positions.to_host(),
+      device_depths.to_host()};
+#else
+  (void)octree;
+  (void)origins;
+  (void)directions;
+  (void)options;
+  return {};
+#endif
+}
+
 CudaRaycastResults raycast_cuda_on_stream(
     const svo::Octree& octree,
     const std::vector<glm::vec3>& origins,
@@ -401,6 +453,47 @@ void test_bad_launcher_inputs_fail() {
 #endif
 }
 
+void test_wide_raycast_matches_cpu() {
+#if SVO_ENABLE_CUDA
+  svo::BuildOptions options;
+  options.max_depth = 4;
+  options.branching = svo::BranchingMode::Wide4;
+  const svo::Octree octree = svo::Octree::from_voxels_cpu(
+      {{0, 0, 0}, {4, 4, 4}, {15, 15, 15}},
+      {20u, 21u, 22u},
+      options);
+
+  const std::vector<glm::vec3> origins{
+      {-1.0f, 0.03125f, 0.03125f},
+      {-1.0f, 0.28125f, 0.28125f},
+      {-1.0f, 0.96875f, 0.96875f},
+      {-1.0f, 0.5f, 0.5f},
+  };
+  const std::vector<glm::vec3> directions{
+      {1.0f, 0.0f, 0.0f},
+      {1.0f, 0.0f, 0.0f},
+      {1.0f, 0.0f, 0.0f},
+      {1.0f, 0.0f, 0.0f},
+  };
+
+  const svo::RaycastBatch cpu = svo::raycast_cpu(octree, origins, directions);
+  const CudaRaycastResults cuda = raycast_wide_cuda_reference(octree, origins, directions);
+  for (std::size_t index = 0; index < origins.size(); ++index) {
+    require(cuda.hit_mask[index] == cpu.hit_mask[index], "wide CUDA raycast hit mask");
+    require(cuda.leaf_ids[index] == cpu.leaf_ids[index], "wide CUDA raycast leaf id");
+    require_float_matches(cuda.t[index], cpu.t[index], "wide CUDA raycast t");
+    require_vec_matches(cuda.positions[index], cpu.positions[index], "wide CUDA raycast position");
+    require(cuda.depths[index] == cpu.depths[index], "wide CUDA raycast depth");
+  }
+
+  svo::RaycastOptions payload_options;
+  payload_options.return_payload_indices = true;
+  const svo::RaycastBatch cpu_payload = svo::raycast_cpu(octree, origins, directions, payload_options);
+  const CudaRaycastResults cuda_payload = raycast_wide_cuda_reference(octree, origins, directions, payload_options);
+  require(cuda_payload.leaf_ids == cpu_payload.leaf_ids, "wide CUDA raycast payload ids");
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -409,5 +502,6 @@ int main() {
   test_random_sparse_scene_and_large_batches();
   test_invalid_directions_write_misses();
   test_bad_launcher_inputs_fail();
+  test_wide_raycast_matches_cpu();
   return 0;
 }

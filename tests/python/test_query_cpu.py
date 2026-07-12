@@ -29,6 +29,35 @@ def test_query_cpu_hits_and_misses() -> None:
     assert payload_indices.tolist() == [0, 1, -1, -1]
 
 
+def test_query_cpu_wide4_matches_octree8() -> None:
+    coords = np.array([[0, 0, 0], [1, 2, 3], [4, 4, 4], [15, 15, 15]], dtype=np.int32)
+    payload_indices = np.array([10, 11, 12, 13], dtype=np.int32)
+    tree = svo.Octree.from_voxels(coords, max_depth=4, payload_indices=payload_indices)
+    wide = svo.Octree.from_voxels(coords, max_depth=4, payload_indices=payload_indices, branching="wide4")
+    points = np.array(
+        [
+            [0.03125, 0.03125, 0.03125],
+            [(1.5 / 16.0), (2.5 / 16.0), (3.5 / 16.0)],
+            [(4.5 / 16.0), (4.5 / 16.0), (4.5 / 16.0)],
+            [(15.5 / 16.0), (15.5 / 16.0), (15.5 / 16.0)],
+            [0.5, 0.5, 0.5],
+            [1.0, 0.5, 0.5],
+        ],
+        dtype=np.float32,
+    )
+
+    np.testing.assert_array_equal(wide.query(points), tree.query(points))
+    np.testing.assert_array_equal(
+        wide.query(points, return_payload_indices=True),
+        tree.query(points, return_payload_indices=True),
+    )
+    if svo.cuda_enabled():
+        cuda_wide = wide.to("cuda")
+        assert cuda_wide.branching == "wide4"
+        np.testing.assert_array_equal(cuda_wide.query(points), wide.query(points))
+        np.testing.assert_array_equal(wide.query_cuda(points), wide.query(points))
+
+
 def test_query_cpu_sphere_regression() -> None:
     grid_size = 64
     radius = 18.0
@@ -92,6 +121,7 @@ def test_cuda_api_is_explicit_for_current_build() -> None:
         assert cuda_tree.max_depth == tree.max_depth
         assert cuda_tree.num_nodes == tree.num_nodes
         assert cuda_tree.num_leaves == tree.num_leaves
+        assert cuda_tree.branching == tree.branching
         assert cuda_tree.query(points).tolist() == tree.query(points).tolist()
         assert tree.query_cuda(points).tolist() == tree.query(points).tolist()
         assert cuda_tree.to("cpu").device == "cpu"

@@ -15,6 +15,7 @@ namespace {
 constexpr float kEpsilon = 1.0e-6f;
 constexpr int kMaxDepth = 30;
 constexpr int kMaxStackEntries = 8 * (kMaxDepth + 1);
+constexpr int kMaxWideStackEntries = 64 * ((kMaxDepth / 2) + 1);
 
 struct AabbDevice {
   glm::vec3 min;
@@ -51,12 +52,24 @@ __device__ int count_bits_device(std::uint8_t value) noexcept {
   return count;
 }
 
+__device__ int count_bits_device(std::uint64_t value) noexcept {
+  return __popcll(static_cast<unsigned long long>(value));
+}
+
 __device__ int prefix_rank_device(std::uint8_t mask, int child_index) noexcept {
   if (child_index <= 0) {
     return 0;
   }
   const std::uint8_t lower_mask = static_cast<std::uint8_t>((1u << child_index) - 1u);
   return count_bits_device(static_cast<std::uint8_t>(mask & lower_mask));
+}
+
+__device__ int prefix_rank_device(std::uint64_t mask, int child_index) noexcept {
+  if (child_index <= 0) {
+    return 0;
+  }
+  const std::uint64_t lower_mask = (1ull << child_index) - 1ull;
+  return count_bits_device(mask & lower_mask);
 }
 
 __device__ AabbDevice child_bounds_device(const AabbDevice& bounds, int child_index) noexcept {
@@ -73,6 +86,15 @@ __device__ AabbDevice child_bounds_device(const AabbDevice& bounds, int child_in
           high_x ? bounds.max.x : mid.x,
           high_y ? bounds.max.y : mid.y,
           high_z ? bounds.max.z : mid.z}};
+}
+
+__device__ AabbDevice wide_child_bounds_device(const AabbDevice& bounds, int child_index) noexcept {
+  const int x = child_index & 3;
+  const int y = (child_index >> 2) & 3;
+  const int z = (child_index >> 4) & 3;
+  const glm::vec3 step = (bounds.max - bounds.min) * 0.25f;
+  const glm::vec3 child_min = bounds.min + step * glm::vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+  return {child_min, child_min + step};
 }
 
 __device__ bool intersect_axis_device(
@@ -308,6 +330,105 @@ __device__ HitCandidateDevice raycast_single_device(
   return best;
 }
 
+__device__ HitCandidateDevice raycast_single_wide_device(
+    const WideNodeDescriptor* nodes,
+    std::size_t num_nodes,
+    const std::uint32_t* leaf_payload_indices,
+    std::size_t num_leaves,
+    int max_depth,
+    const AabbDevice& root_bounds,
+    const glm::vec3& origin,
+    const glm::vec3& direction,
+    bool return_payload_indices) noexcept {
+  HitCandidateDevice best;
+  if (num_nodes == 0 || !finite_vec3_device(origin)) {
+    return best;
+  }
+
+  bool valid_direction = false;
+  const glm::vec3 normalized_direction = normalize_or_zero_device(direction, valid_direction);
+  if (!valid_direction) {
+    return best;
+  }
+
+  float root_t_near = 0.0f;
+  float root_t_far = 0.0f;
+  if (!intersect_aabb_device(root_bounds, origin, normalized_direction, root_t_near, root_t_far)) {
+    return best;
+  }
+
+  if (max_depth == 0) {
+    consider_leaf_device(
+        leaf_payload_indices,
+        num_leaves,
+        origin,
+        normalized_direction,
+        root_bounds,
+        0,
+        0,
+        return_payload_indices,
+        best);
+    return best;
+  }
+
+  StackEntry stack[kMaxWideStackEntries];
+  int stack_size = 0;
+  stack[stack_size++] = StackEntry{0u, max_depth, root_bounds};
+
+  while (stack_size > 0) {
+    const StackEntry entry = stack[--stack_size];
+    if (entry.node_index >= num_nodes || entry.depth_remaining <= 0) {
+      continue;
+    }
+
+    const WideNodeDescriptor descriptor = nodes[entry.node_index];
+    const std::uint64_t child_mask = descriptor.child_mask();
+    const std::uint64_t leaf_mask = descriptor.leaf_mask();
+    const std::uint64_t internal_mask = descriptor.internal_child_mask();
+
+    for (std::uint64_t active_mask = child_mask; active_mask != 0u; active_mask &= active_mask - 1ull) {
+      const int child_index = __ffsll(static_cast<unsigned long long>(active_mask)) - 1;
+      const std::uint64_t child_bit = 1ull << child_index;
+
+      const AabbDevice child = wide_child_bounds_device(entry.bounds, child_index);
+      float t_near = 0.0f;
+      float t_far = 0.0f;
+      if (!intersect_aabb_device(child, origin, normalized_direction, t_near, t_far)) {
+        continue;
+      }
+      if (best.hit && fmaxf(t_near, 0.0f) > best.t + kEpsilon) {
+        continue;
+      }
+
+      if ((leaf_mask & child_bit) != 0u) {
+        const std::int32_t leaf_id = static_cast<std::int32_t>(
+            static_cast<std::size_t>(descriptor.payload_base()) +
+            static_cast<std::size_t>(prefix_rank_device(leaf_mask, child_index)));
+        const std::int32_t depth = max_depth - entry.depth_remaining + 2;
+        consider_leaf_device(
+            leaf_payload_indices,
+            num_leaves,
+            origin,
+            normalized_direction,
+            child,
+            leaf_id,
+            depth,
+            return_payload_indices,
+            best);
+        continue;
+      }
+
+      const std::size_t child_node_index = static_cast<std::size_t>(descriptor.child_base()) +
+          static_cast<std::size_t>(prefix_rank_device(internal_mask, child_index));
+      if (stack_size < kMaxWideStackEntries) {
+        stack[stack_size++] = StackEntry{child_node_index, entry.depth_remaining - 2, child};
+      }
+    }
+  }
+
+  return best;
+}
+
 __global__ void raycast_kernel(
     const NodeDescriptor* nodes,
     std::size_t num_nodes,
@@ -339,6 +460,47 @@ __global__ void raycast_kernel(
       num_leaves,
       max_depth,
       root_bounds,
+      origins[index],
+      directions[index],
+      return_payload_indices);
+
+  if (hit.hit) {
+    write_hit_device(hit, hit_mask, leaf_ids, t, positions, depths, index);
+  } else {
+    write_miss_device(hit_mask, leaf_ids, t, positions, depths, index);
+  }
+}
+
+__global__ void raycast_wide_kernel(
+    const WideNodeDescriptor* nodes,
+    std::size_t num_nodes,
+    const std::uint32_t* leaf_payload_indices,
+    std::size_t num_leaves,
+    int max_depth,
+    glm::vec3 min_bound,
+    glm::vec3 max_bound,
+    const glm::vec3* origins,
+    const glm::vec3* directions,
+    std::uint8_t* hit_mask,
+    std::int32_t* leaf_ids,
+    float* t,
+    glm::vec3* positions,
+    std::int32_t* depths,
+    std::size_t count,
+    bool return_payload_indices) {
+  const std::size_t index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
+      static_cast<std::size_t>(threadIdx.x);
+  if (index >= count) {
+    return;
+  }
+
+  const HitCandidateDevice hit = raycast_single_wide_device(
+      nodes,
+      num_nodes,
+      leaf_payload_indices,
+      num_leaves,
+      max_depth,
+      AabbDevice{min_bound, max_bound},
       origins[index],
       directions[index],
       return_payload_indices);
@@ -422,6 +584,66 @@ void raycast_cuda(
       options.return_payload_indices);
 
   check_cuda_launch(cudaGetLastError(), "raycast_kernel launch");
+}
+
+void raycast_wide_cuda(
+    const WideNodeDescriptor* nodes,
+    std::size_t num_nodes,
+    const std::uint32_t* leaf_payload_indices,
+    std::size_t num_leaves,
+    int max_depth,
+    const RootBounds& root_bounds,
+    const glm::vec3* origins,
+    const glm::vec3* directions,
+    std::uint8_t* hit_mask,
+    std::int32_t* leaf_ids,
+    float* t,
+    glm::vec3* positions,
+    std::int32_t* depths,
+    std::size_t count,
+    const RaycastOptions& options,
+    CudaStreamHandle stream) {
+  if (max_depth < 0 || max_depth > kMaxDepth || (max_depth % 2) != 0) {
+    throw ValidationError("wide4 max_depth must be even and in the range [0, 30]");
+  }
+  check_not_null(nodes, num_nodes, "wide_nodes");
+  check_not_null(leaf_payload_indices, num_leaves, "leaf_payload_indices");
+  check_not_null(origins, count, "origins");
+  check_not_null(directions, count, "directions");
+  check_not_null(hit_mask, count, "hit_mask");
+  check_not_null(leaf_ids, count, "leaf_ids");
+  check_not_null(t, count, "t");
+  check_not_null(positions, count, "positions");
+  check_not_null(depths, count, "depths");
+
+  if (count == 0) {
+    return;
+  }
+
+  constexpr int kBlockSize = 128;
+  const int grid_size = static_cast<int>((count + static_cast<std::size_t>(kBlockSize) - 1u) /
+      static_cast<std::size_t>(kBlockSize));
+  cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  raycast_wide_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
+      nodes,
+      num_nodes,
+      leaf_payload_indices,
+      num_leaves,
+      max_depth,
+      root_bounds[0],
+      root_bounds[1],
+      origins,
+      directions,
+      hit_mask,
+      leaf_ids,
+      t,
+      positions,
+      depths,
+      count,
+      options.return_payload_indices);
+
+  check_cuda_launch(cudaGetLastError(), "raycast_wide_kernel launch");
 }
 
 }  // namespace svo

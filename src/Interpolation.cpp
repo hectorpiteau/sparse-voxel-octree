@@ -117,6 +117,9 @@ void validate_inputs(
     const void* payload,
     std::size_t payload_rows,
     std::size_t channels) {
+  if (octree.branching() == BranchingMode::Wide4) {
+    throw ValidationError("trilinear interpolation does not support wide4 trees yet");
+  }
   if (octree.max_depth() < 0 || octree.max_depth() > 30) {
     throw ValidationError("max_depth must be in the range [0, 30]");
   }

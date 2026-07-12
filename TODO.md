@@ -671,7 +671,7 @@ Goal: integrate custom CUDA backward with PyTorch autograd.
 - [x] Scatter-add gradients into color.
 - [ ] Support feature gradients if features are rendered.
 - [x] Add `torch.autograd.Function`.
-- [ ] Add `torch.nn.Module` wrapper.
+- [x] Add `torch.nn.Module` wrapper.
 - [x] Add finite-difference gradient tests.
 
 Implemented scope:
@@ -687,7 +687,7 @@ Implemented scope:
 - [x] Finite-difference density gradient check.
 - [ ] Gradcheck features, if implemented.
 - [x] Loss backward smoke test.
-- [ ] Optimization loop reduces loss on tiny target.
+- [x] Optimization loop reduces loss on tiny target.
 - [x] No race conditions under compute-sanitizer for covered cases.
 - [x] Atomic scatter behavior is documented by tests as numerically tolerant.
 
@@ -712,27 +712,27 @@ Design direction:
 
 ### Tasks
 
-- [ ] Define the public/API representation for branching mode or a dedicated wide-tree type.
-- [ ] Design a 64-child descriptor format with child occupancy, leaf flags, child base, and payload base.
-- [ ] Implement CPU builder for 4x4x4 sparse nodes.
-- [ ] Implement CPU query traversal for wide nodes.
-- [ ] Implement CUDA query traversal for wide nodes.
-- [ ] Implement CPU raycast traversal for wide nodes.
-- [ ] Implement CUDA raycast traversal for wide nodes.
-- [ ] Implement CPU forward render traversal for wide nodes.
-- [ ] Implement CUDA forward render traversal for wide nodes.
-- [ ] Update renderer backward traversal after Milestone 13 exists.
-- [ ] Add benchmarks comparing 8-way vs 64-way traversal at equal voxel resolution.
-- [ ] Document memory/layout tradeoffs and when to choose each topology.
+- [x] Define the public/API representation for branching mode or a dedicated wide-tree type.
+- [x] Design a 64-child descriptor format with child occupancy, leaf flags, child base, and payload base.
+- [x] Implement CPU builder for 4x4x4 sparse nodes.
+- [x] Implement CPU query traversal for wide nodes.
+- [x] Implement CUDA query traversal for wide nodes.
+- [x] Implement CPU raycast traversal for wide nodes.
+- [x] Implement CUDA raycast traversal for wide nodes.
+- [x] Implement CPU forward render traversal for wide nodes.
+- [x] Implement CUDA forward render traversal for wide nodes.
+- [x] Update renderer backward traversal after Milestone 13 exists.
+- [x] Add benchmarks comparing 8-way vs 64-way traversal at equal voxel resolution.
+- [x] Document memory/layout tradeoffs and when to choose each topology.
 
 ### Tests
 
-- [ ] Builder output validation for empty, single voxel, dense small cube, and sparse random scenes.
-- [ ] CPU query parity between 8-way and 64-way trees for equivalent occupied coordinates.
-- [ ] CUDA query parity with CPU wide query.
-- [ ] CPU/CUDA raycast parity for wide nodes.
-- [ ] CPU/CUDA forward render parity for wide nodes.
-- [ ] Backward renderer parity/gradcheck after wide traversal is wired into Milestone 13 code.
+- [x] Builder output validation for empty, single voxel, dense small cube, and sparse random scenes.
+- [x] CPU query parity between 8-way and 64-way trees for equivalent occupied coordinates.
+- [x] CUDA query parity with CPU wide query.
+- [x] CPU/CUDA raycast parity for wide nodes.
+- [x] CPU/CUDA forward render parity for wide nodes.
+- [x] Backward renderer parity/gradcheck after wide traversal is wired into Milestone 13 code.
 - [ ] Edge cases at 4x4x4 child boundaries.
 
 ### Acceptance criteria
@@ -831,6 +831,115 @@ Goal: make the project usable by new developers and coding agents.
 - [ ] New contributor can run examples.
 - [ ] Coding agent has enough context to modify the project safely.
 - [ ] Documentation describes what is differentiable and what is not.
+
+---
+
+## Milestone 17.5 — Production rendering acceleration architecture
+
+Goal: define and implement the next high-impact rendering acceleration layer after documentation is complete, while preserving differentiable training paths.
+
+Context:
+
+- The existing `Octree8` and `Wide4` paths are correct, but wide branching alone is not guaranteed to improve rendering speed.
+- Public high-performance sparse volume systems tend to combine hierarchy with DDA/HDDA traversal, empty-space skipping, compact ray intervals, and dense brick/tile leaves.
+- Treat topology as an acceleration structure unless explicitly designing differentiable topology updates. Payload values such as density, color, and features remain differentiable.
+
+### Phase 1 — Rendering and traversal profiling counters
+
+- [ ] Add optional CPU/CUDA profiling counters for rendering and ray traversal.
+- [ ] Count nodes visited per ray.
+- [ ] Count child candidates tested per ray.
+- [ ] Count active child candidates emitted per ray.
+- [ ] Count child-candidate sorts or ordered insertions where applicable.
+- [ ] Count leaf segments/samples composited per ray.
+- [ ] Count early opacity termination events.
+- [ ] Count stack pushes/pops and maximum stack depth.
+- [ ] Count emitted compact intervals once interval generation exists.
+- [ ] Expose aggregated profiling output in C++ benchmarks.
+- [ ] Expose optional profiling output in Python for debug/viewer use.
+- [ ] Keep profiling disabled by default and compile/runtime gated so hot kernels do not pay overhead in normal rendering.
+
+### Phase 2 — Hierarchical DDA / HDDA traversal
+
+- [ ] Implement DDA traversal through `Wide4` child grids instead of testing many child AABBs and sorting candidates.
+- [ ] Step through the local `4 x 4 x 4` child grid in ray order.
+- [ ] Use bit masks to check whether the current child cell is occupied.
+- [ ] Use popcount/rank only after a hit child cell is known to be active.
+- [ ] Avoid per-node child candidate arrays in the hot path.
+- [ ] Add CPU reference implementation first for correctness.
+- [ ] Add CUDA implementation with fixed-size local state and low register pressure.
+- [ ] Preserve the existing 8-way path unless a safe equivalent DDA traversal is added.
+- [ ] Add debug checks comparing old wide traversal and DDA traversal on small scenes.
+
+### Phase 3 — Compact interval generation before rendering
+
+- [ ] Add a render prepass that traverses rays and emits compact occupied intervals.
+- [ ] Store interval records as structure-of-arrays for CUDA-friendly access:
+  - [ ] `ray_index`
+  - [ ] `t_start`
+  - [ ] `t_end`
+  - [ ] `leaf_id`
+  - [ ] `payload_index`
+  - [ ] optional `node_id` or `brick_id`
+- [ ] Add prefix-sum/compaction logic for variable interval counts per ray.
+- [ ] Add capacity handling and clear overflow reporting.
+- [ ] Add a second forward-render kernel that consumes intervals and composites color/opacity/depth.
+- [ ] Add a backward-render kernel that consumes the same intervals to scatter gradients into density/color/features.
+- [ ] Keep interval generation non-differentiable by default; document that gradients flow through payload values, not through topology or interval membership.
+- [ ] Support a render-only fast path that can skip storing extra backward metadata.
+- [ ] Support a training path that stores or recomputes the interval data required for backward.
+
+### Phase 4 — Brick leaves and tile values
+
+- [ ] Add design for dense brick leaves, initially behind an experimental build/runtime option.
+- [ ] Evaluate brick sizes such as `4^3`, `8^3`, and possibly `16^3`.
+- [ ] Store brick payloads contiguously for coalesced CUDA reads.
+- [ ] Add a brick descriptor or payload-range descriptor without bloating the existing `Octree8` descriptor.
+- [ ] Traverse sparse topology only until a brick leaf is reached.
+- [ ] March inside bricks with local DDA or fixed-step sampling.
+- [ ] Add optional homogeneous tile values for regions that can be skipped or composited without descending.
+- [ ] Define gradient behavior for brick voxel density/color/features.
+- [ ] Keep topology/brick occupancy updates outside autograd unless a later milestone introduces differentiable occupancy.
+
+### Phase 5 — Coarse occupancy accelerator
+
+- [ ] Add an optional top-level occupancy grid or macro-cell bitfield for empty-space skipping before tree traversal.
+- [ ] Evaluate macro resolutions such as `16^3`, `32^3`, and `64^3`.
+- [ ] Traverse macro cells with DDA and enter the tree only for occupied macro cells.
+- [ ] Support CUDA-resident occupancy data to avoid CPU-GPU transfers.
+- [ ] Add update/rebuild APIs for occupancy when topology changes.
+- [ ] Document memory cost versus traversal savings.
+- [ ] Ensure this accelerator is optional and does not change query/render semantics.
+
+### Tests
+
+- [ ] CPU DDA traversal matches existing wide traversal on empty, dense, sparse random, sphere, and boundary scenes.
+- [ ] CUDA DDA traversal matches CPU DDA traversal within existing tolerances.
+- [ ] Compact interval generation matches direct traversal compositing for color, opacity, and depth.
+- [ ] Backward rendering through intervals matches existing finite-difference tests for density and color.
+- [ ] Brick-leaf rendering matches equivalent per-voxel rendering on small scenes.
+- [ ] Coarse occupancy accelerator preserves exact render/query results relative to the non-accelerated path.
+- [ ] Overflow paths for interval buffers fail clearly and do not corrupt outputs.
+- [ ] Profiling counters are deterministic enough for regression checks on fixed scenes.
+
+### Benchmarks
+
+- [ ] Compare old wide traversal vs wide DDA traversal.
+- [ ] Compare direct traversal rendering vs interval prepass + interval rendering.
+- [ ] Compare octree leaves vs brick leaves at equal scene resolution.
+- [ ] Compare with and without coarse occupancy acceleration.
+- [ ] Benchmark forward render and backward render separately.
+- [ ] Report GPU kernel time separately from allocation and CPU-GPU transfer time.
+- [ ] Include realtime viewer FPS measurements for representative small, medium, and large scenes.
+
+### Acceptance criteria
+
+- [ ] Documentation from Milestone 17 remains current after the new acceleration path is added.
+- [ ] Default rendering remains correct and tested on CPU and CUDA.
+- [ ] Differentiable rendering still supports PyTorch optimization loops.
+- [ ] Render-only and training modes are clearly separated where their performance/memory tradeoffs differ.
+- [ ] Benchmarks show whether each acceleration layer helps, hurts, or is scene-dependent.
+- [ ] Any approximation, early termination, LOD, or topology-discrete behavior is documented explicitly.
 
 ---
 

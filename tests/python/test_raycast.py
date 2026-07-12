@@ -115,6 +115,36 @@ def test_raycast_bad_inputs_raise_clear_errors() -> None:
         tree.raycast(bad_origins, directions)
 
 
+def test_raycast_wide4_matches_octree8() -> None:
+    coords = np.array([[0, 0, 0], [7, 8, 9], [15, 15, 15]], dtype=np.int32)
+    tree = svo.Octree.from_voxels(coords, max_depth=4)
+    wide = svo.Octree.from_voxels(coords, max_depth=4, branching="wide4")
+    origins = np.array(
+        [
+            [-1.0, 0.03125, 0.03125],
+            [-1.0, 8.5 / 16.0, 9.5 / 16.0],
+            [2.0, 15.5 / 16.0, 15.5 / 16.0],
+            [-1.0, 0.2, 0.2],
+        ],
+        dtype=np.float32,
+    )
+    directions = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    expected = tree.raycast(origins, directions)
+    actual = wide.raycast(origins, directions)
+    _assert_raycast_outputs_equal(actual, expected)
+    if svo.cuda_enabled():
+        _assert_raycast_outputs_equal(wide.to("cuda").raycast(origins, directions), expected)
+
+
 
 def _assert_raycast_outputs_equal(actual, expected) -> None:
     for actual_array, expected_array in zip(actual, expected):

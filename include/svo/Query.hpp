@@ -30,6 +30,19 @@ void query_points_cuda(
     std::size_t count,
     const QueryOptions& options = {},
     CudaStreamHandle stream = nullptr);
+
+void query_points_wide_cuda(
+    const WideNodeDescriptor* nodes,
+    std::size_t num_nodes,
+    const std::uint32_t* leaf_payload_indices,
+    std::size_t num_leaves,
+    int max_depth,
+    const RootBounds& root_bounds,
+    const glm::vec3* points,
+    std::int32_t* results,
+    std::size_t count,
+    const QueryOptions& options = {},
+    CudaStreamHandle stream = nullptr);
 #endif
 
 }  // namespace svo
