@@ -7,7 +7,8 @@ The current decision is:
 
 - Milestone 18 profiles the current implementation and applies low-risk
   optimizations only.
-- Milestone 19 starts with measured `Wide4` local DDA/HDDA traversal.
+- Milestone 19 has started with measured `Wide4` local DDA/HDDA traversal for
+  raycast, forward render, and backward render.
 - Dense bricks, compact descriptors, block-local addressing, contour data,
   compressed attributes, and serialization stay deferred unless profiling proves
   one of them is the immediate bottleneck.
@@ -127,17 +128,26 @@ Milestone 18 is successful when benchmark output is reproducible, before/after
 numbers are documented, and the data is sufficient to confirm or revise the
 Milestone 19 starting point.
 
-## Milestone 19 Direction
+## Milestone 19 Status
 
-Primary path:
+Implemented primary path:
 
-- Implement `Wide4` local DDA/HDDA traversal.
-- Step through each local `4 x 4 x 4` child grid in ray order.
-- Use bit masks to test occupancy.
-- Use popcount/rank only after an active child cell is known.
-- Avoid per-node child candidate arrays in the hot path.
-- Keep the previous wide traversal available for debug comparison until the new
-  traversal is proven stable.
+- `Wide4` raycast, forward render, and backward render now use local DDA/HDDA
+  traversal.
+- Each visited wide node steps through its local `4 x 4 x 4` child grid in ray
+  order.
+- Occupancy is tested with bit masks before child rank/payload rank is computed.
+- Popcount/rank is used only after an active child cell is known.
+- The Wide4 CUDA render paths no longer allocate or sort per-node
+  `candidates[64]` arrays.
+- Octree8 traversal remains unchanged.
+
+Still open:
+
+- Add an explicit debug comparison path if old Wide4 traversal needs to remain
+  available for side-by-side benchmarking.
+- Record larger before/after benchmark snapshots for representative scenes and
+  grid sizes.
 
 Secondary path:
 

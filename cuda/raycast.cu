@@ -39,6 +39,35 @@ struct HitCandidateDevice {
   std::int32_t depth = -1;
 };
 
+struct WideDdaCellDevice {
+  int child_index = 0;
+  AabbDevice bounds{};
+  float t_near = 0.0f;
+  float t_far = 0.0f;
+};
+
+struct WideDdaStateDevice {
+  bool valid = false;
+  bool reverse = false;
+  AabbDevice bounds{};
+  glm::vec3 cell_size{0.0f, 0.0f, 0.0f};
+  float base_t = 0.0f;
+  float max_s = 0.0f;
+  float current_s = 0.0f;
+  int cell_x = 0;
+  int cell_y = 0;
+  int cell_z = 0;
+  int step_x = 0;
+  int step_y = 0;
+  int step_z = 0;
+  float next_x = 0.0f;
+  float next_y = 0.0f;
+  float next_z = 0.0f;
+  float delta_x = 0.0f;
+  float delta_y = 0.0f;
+  float delta_z = 0.0f;
+};
+
 __device__ bool finite_vec3_device(const glm::vec3& value) noexcept {
   return isfinite(value.x) && isfinite(value.y) && isfinite(value.z);
 }
@@ -104,15 +133,6 @@ __device__ AabbDevice child_bounds_device(const AabbDevice& bounds, int child_in
           high_z ? bounds.max.z : mid.z}};
 }
 
-__device__ AabbDevice wide_child_bounds_device(const AabbDevice& bounds, int child_index) noexcept {
-  const int x = child_index & 3;
-  const int y = (child_index >> 2) & 3;
-  const int z = (child_index >> 4) & 3;
-  const glm::vec3 step = (bounds.max - bounds.min) * 0.25f;
-  const glm::vec3 child_min = bounds.min + step * glm::vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
-  return {child_min, child_min + step};
-}
-
 __device__ bool intersect_axis_device(
     float origin,
     float direction,
@@ -150,6 +170,150 @@ __device__ bool intersect_aabb_device(
       intersect_axis_device(origin.y, direction.y, bounds.min.y, bounds.max.y, t_near, t_far) &&
       intersect_axis_device(origin.z, direction.z, bounds.min.z, bounds.max.z, t_near, t_far) &&
       t_far >= 0.0f;
+}
+
+__device__ int clamp_cell_device(int cell) noexcept {
+  return max(0, min(3, cell));
+}
+
+__device__ int local_cell_for_position_device(
+    float position,
+    float min_bound,
+    float cell_size,
+    float walk_direction) noexcept {
+  const float local = (position - min_bound) / cell_size;
+  const float rounded = roundf(local);
+  if (fabsf(local - rounded) <= 8.0f * kEpsilon) {
+    const int boundary = static_cast<int>(rounded);
+    if (boundary <= 0) {
+      return 0;
+    }
+    if (boundary >= 4) {
+      return 3;
+    }
+    return walk_direction < -kEpsilon ? boundary - 1 : boundary;
+  }
+  return clamp_cell_device(static_cast<int>(floorf(local)));
+}
+
+__device__ void setup_wide_dda_axis_device(
+    float origin_axis,
+    float direction_axis,
+    float min_bound,
+    float cell_size,
+    int cell,
+    int& step,
+    float& next_s,
+    float& delta_s) noexcept {
+  if (fabsf(direction_axis) <= kEpsilon) {
+    step = 0;
+    next_s = CUDART_INF_F;
+    delta_s = CUDART_INF_F;
+    return;
+  }
+  step = direction_axis > 0.0f ? 1 : -1;
+  const int boundary_index = step > 0 ? cell + 1 : cell;
+  const float boundary = min_bound + cell_size * static_cast<float>(boundary_index);
+  next_s = (boundary - origin_axis) / direction_axis;
+  if (next_s < 0.0f && next_s > -8.0f * kEpsilon) {
+    next_s = 0.0f;
+  }
+  delta_s = cell_size / fabsf(direction_axis);
+}
+
+__device__ WideDdaStateDevice make_wide_dda_state_device(
+    const AabbDevice& bounds,
+    const glm::vec3& origin,
+    const glm::vec3& direction,
+    float t_near,
+    float t_far,
+    bool reverse) noexcept {
+  WideDdaStateDevice state;
+  const float clipped_near = fmaxf(t_near, 0.0f);
+  if (t_far < clipped_near) {
+    return state;
+  }
+
+  state.valid = true;
+  state.reverse = reverse;
+  state.bounds = bounds;
+  state.base_t = reverse ? t_far : clipped_near;
+  state.max_s = t_far - clipped_near;
+  state.cell_size = (bounds.max - bounds.min) * 0.25f;
+  const glm::vec3 walk_origin = origin + direction * state.base_t;
+  const glm::vec3 walk_direction = reverse ? -direction : direction;
+
+  state.cell_x = local_cell_for_position_device(walk_origin.x, bounds.min.x, state.cell_size.x, walk_direction.x);
+  state.cell_y = local_cell_for_position_device(walk_origin.y, bounds.min.y, state.cell_size.y, walk_direction.y);
+  state.cell_z = local_cell_for_position_device(walk_origin.z, bounds.min.z, state.cell_size.z, walk_direction.z);
+
+  setup_wide_dda_axis_device(
+      walk_origin.x,
+      walk_direction.x,
+      bounds.min.x,
+      state.cell_size.x,
+      state.cell_x,
+      state.step_x,
+      state.next_x,
+      state.delta_x);
+  setup_wide_dda_axis_device(
+      walk_origin.y,
+      walk_direction.y,
+      bounds.min.y,
+      state.cell_size.y,
+      state.cell_y,
+      state.step_y,
+      state.next_y,
+      state.delta_y);
+  setup_wide_dda_axis_device(
+      walk_origin.z,
+      walk_direction.z,
+      bounds.min.z,
+      state.cell_size.z,
+      state.cell_z,
+      state.step_z,
+      state.next_z,
+      state.delta_z);
+  return state;
+}
+
+__device__ bool next_wide_dda_cell_device(WideDdaStateDevice& state, WideDdaCellDevice& cell) noexcept {
+  if (!state.valid || state.current_s > state.max_s + kEpsilon || state.cell_x < 0 || state.cell_x >= 4 ||
+      state.cell_y < 0 || state.cell_y >= 4 || state.cell_z < 0 || state.cell_z >= 4) {
+    return false;
+  }
+
+  const float next_s = fminf(fminf(state.next_x, state.next_y), fminf(state.next_z, state.max_s));
+  cell.child_index = state.cell_x | (state.cell_y << 2) | (state.cell_z << 4);
+  const glm::vec3 child_min = state.bounds.min +
+      state.cell_size *
+          glm::vec3{static_cast<float>(state.cell_x), static_cast<float>(state.cell_y), static_cast<float>(state.cell_z)};
+  cell.bounds = {child_min, child_min + state.cell_size};
+  if (state.reverse) {
+    cell.t_near = state.base_t - next_s;
+    cell.t_far = state.base_t - state.current_s;
+  } else {
+    cell.t_near = state.base_t + state.current_s;
+    cell.t_far = state.base_t + next_s;
+  }
+
+  if (next_s >= state.max_s - kEpsilon) {
+    state.valid = false;
+    return true;
+  }
+
+  state.current_s = next_s;
+  if (state.next_x <= state.next_y + kEpsilon && state.next_x <= state.next_z + kEpsilon) {
+    state.cell_x += state.step_x;
+    state.next_x += state.delta_x;
+  } else if (state.next_y <= state.next_z + kEpsilon) {
+    state.cell_y += state.step_y;
+    state.next_y += state.delta_y;
+  } else {
+    state.cell_z += state.step_z;
+    state.next_z += state.delta_z;
+  }
+  return true;
 }
 
 __device__ bool better_hit_device(
@@ -420,18 +584,24 @@ __device__ HitCandidateDevice raycast_single_wide_device(
     const std::uint64_t leaf_mask = descriptor.leaf_mask();
     const std::uint64_t internal_mask = descriptor.internal_child_mask();
 
-    for (std::uint64_t active_mask = child_mask; active_mask != 0u; active_mask &= active_mask - 1ull) {
-      const int child_index = __ffsll(static_cast<unsigned long long>(active_mask)) - 1;
+    WideDdaStateDevice dda;
+    float entry_t_near = 0.0f;
+    float entry_t_far = 0.0f;
+    if (intersect_aabb_device(entry.bounds, origin, normalized_direction, entry_t_near, entry_t_far)) {
+      dda = make_wide_dda_state_device(entry.bounds, origin, normalized_direction, entry_t_near, entry_t_far, false);
+    } else {
+      dda.valid = false;
+    }
+    WideDdaCellDevice cell;
+    while (next_wide_dda_cell_device(dda, cell)) {
+      const int child_index = cell.child_index;
       const std::uint64_t child_bit = 1ull << child_index;
       add_stat_device(stats != nullptr ? &stats->child_candidates_tested : nullptr);
-
-      const AabbDevice child = wide_child_bounds_device(entry.bounds, child_index);
-      float t_near = 0.0f;
-      float t_far = 0.0f;
-      if (!intersect_aabb_device(child, origin, normalized_direction, t_near, t_far)) {
+      if ((child_mask & child_bit) == 0u) {
         continue;
       }
-      if (best.hit && fmaxf(t_near, 0.0f) > best.t + kEpsilon) {
+
+      if (best.hit && fmaxf(cell.t_near, 0.0f) > best.t + kEpsilon) {
         continue;
       }
 
@@ -445,7 +615,7 @@ __device__ HitCandidateDevice raycast_single_wide_device(
             num_leaves,
             origin,
             normalized_direction,
-            child,
+            cell.bounds,
             leaf_id,
             depth,
             return_payload_indices,
@@ -457,7 +627,7 @@ __device__ HitCandidateDevice raycast_single_wide_device(
       const std::size_t child_node_index = static_cast<std::size_t>(descriptor.child_base()) +
           static_cast<std::size_t>(prefix_rank_device(internal_mask, child_index));
       if (stack_size < kMaxWideStackEntries) {
-        stack[stack_size++] = StackEntry{child_node_index, entry.depth_remaining - 2, child};
+        stack[stack_size++] = StackEntry{child_node_index, entry.depth_remaining - 2, cell.bounds};
         add_stat_device(stats != nullptr ? &stats->stack_pushes : nullptr);
         max_stat_device(stats != nullptr ? &stats->max_stack_depth : nullptr, static_cast<std::uint64_t>(stack_size));
       }

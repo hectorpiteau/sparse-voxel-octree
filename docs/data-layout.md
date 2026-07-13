@@ -65,6 +65,9 @@ Current:
 - Wide4 descriptors for 64-child nodes.
 - Compact child and leaf spans.
 - CPU/CUDA traversal dispatch by branching mode.
+- Wide4 raycast and volume rendering step through each local `4 x 4 x 4`
+  child grid with DDA, then use masks and popcount/rank only after an occupied
+  child cell is known.
 
 Planned/future:
 

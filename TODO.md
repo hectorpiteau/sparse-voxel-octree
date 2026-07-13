@@ -982,12 +982,12 @@ change public semantics, topology layout, or differentiability behavior.
 - [ ] Reduce stack traffic and register pressure where profiling identifies it as a bottleneck.
   - Current state:
     - CUDA raycast uses fixed per-thread stacks: `8 * (max_depth + 1)` for Octree8 and `64 * ((max_depth / 2) + 1)` for Wide4.
-    - CUDA render uses both traversal stacks and per-node candidate arrays (`candidates[8]` / `candidates[64]`) sorted per visited node.
+    - CUDA render uses traversal stacks. Octree8 still sorts small per-node `candidates[8]`; Wide4 now uses local DDA instead of `candidates[64]`.
     - CUDA backward render also stores up to `kMaxRenderSegments = 512` per ray, which is heavy but keeps the backward implementation simple and correct.
     - Profiling counters now expose stack pushes/pops and max stack depth, but they do not directly report register spills or local memory.
   - Low-risk implementation path:
     - Use benchmark counters plus Nsight Compute/register spill data before editing stack structures.
-    - For Wide4, prefer Milestone 19 local DDA/HDDA traversal over micro-optimizing the current candidate array path.
+    - For Wide4, continue profiling the Milestone 19 local DDA/HDDA traversal before changing stack structures or descriptor layout.
     - For Octree8, consider smaller candidate sorting or near/far child ordering only if render benchmarks show sorting dominates.
   - Estimated effort: medium for profiling, high for meaningful render traversal changes.
   - Risk: high for backward/render because traversal order affects compositing correctness and gradient parity.
@@ -1040,14 +1040,15 @@ speed, not general sparse-layout compression.
 
 ### Primary Path — Wide4 Local DDA / HDDA
 
-- [ ] Implement CPU reference DDA traversal through `Wide4` child grids.
-- [ ] Step through the local `4 x 4 x 4` child grid in ray order.
-- [ ] Use bit masks to check whether the current child cell is occupied.
-- [ ] Use popcount/rank only after a hit child cell is known to be active.
-- [ ] Avoid per-node child candidate arrays in the hot path.
-- [ ] Add CUDA implementation with fixed-size local state and low register pressure.
-- [ ] Preserve the existing 8-way path unless a safe equivalent DDA traversal is added.
-- [ ] Keep the previous wide traversal available for debug comparison until confidence is high.
+- [x] Implement CPU reference DDA traversal through `Wide4` child grids.
+- [x] Step through the local `4 x 4 x 4` child grid in ray order.
+- [x] Use bit masks to check whether the current child cell is occupied.
+- [x] Use popcount/rank only after a hit child cell is known to be active.
+- [x] Avoid per-node child candidate arrays in the hot path.
+- [x] Add CUDA implementation with fixed-size local state and low register pressure.
+- [x] Preserve the existing 8-way path unless a safe equivalent DDA traversal is added.
+- [x] Do not keep the previous wide traversal as a maintained runtime fallback;
+  use git history for old-vs-new comparison if needed.
 
 ### Secondary Path — Compact Render Intervals
 
@@ -1094,7 +1095,7 @@ speed, not general sparse-layout compression.
 
 ### Benchmarks
 
-- [ ] Compare old wide traversal vs wide DDA traversal.
+- [ ] Compare old wide traversal vs wide DDA traversal through commit-to-commit benchmarks if needed.
 - [ ] Compare direct traversal rendering vs interval prepass + interval rendering if intervals are implemented.
 - [ ] Compare with and without coarse occupancy acceleration if it is implemented.
 - [ ] Benchmark forward render and backward render separately.

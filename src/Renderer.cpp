@@ -34,6 +34,13 @@ struct SegmentCandidate {
   float t_far = 0.0f;
 };
 
+struct WideDdaCell {
+  int child_index = 0;
+  Aabb bounds{};
+  float t_near = 0.0f;
+  float t_far = 0.0f;
+};
+
 struct Accumulator {
   glm::vec3 rgb{0.0f, 0.0f, 0.0f};
   float depth = 0.0f;
@@ -89,15 +96,6 @@ Aabb child_bounds(const Aabb& bounds, int child_index) noexcept {
           high_z ? bounds.max.z : mid.z}};
 }
 
-Aabb wide_child_bounds(const Aabb& bounds, int child_index) noexcept {
-  const int x = child_index & 3;
-  const int y = (child_index >> 2) & 3;
-  const int z = (child_index >> 4) & 3;
-  const glm::vec3 step = (bounds.max - bounds.min) * 0.25f;
-  const glm::vec3 child_min = bounds.min + step * glm::vec3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
-  return {child_min, child_min + step};
-}
-
 bool intersect_axis(float origin, float direction, float min_bound, float max_bound, float& t_min, float& t_max) {
   if (std::fabs(direction) <= kEpsilon) {
     return origin >= min_bound && origin <= max_bound;
@@ -126,6 +124,129 @@ bool intersect_aabb(
   return intersect_axis(origin.x, direction.x, bounds.min.x, bounds.max.x, t_near, t_far) &&
       intersect_axis(origin.y, direction.y, bounds.min.y, bounds.max.y, t_near, t_far) &&
       intersect_axis(origin.z, direction.z, bounds.min.z, bounds.max.z, t_near, t_far) && t_far >= 0.0f;
+}
+
+int local_cell_for_position(float position, float min_bound, float cell_size, float walk_direction) noexcept {
+  const float local = (position - min_bound) / cell_size;
+  const float rounded = std::round(local);
+  if (std::fabs(local - rounded) <= 8.0f * kEpsilon) {
+    const int boundary = static_cast<int>(rounded);
+    if (boundary <= 0) {
+      return 0;
+    }
+    if (boundary >= 4) {
+      return 3;
+    }
+    return walk_direction < -kEpsilon ? boundary - 1 : boundary;
+  }
+  return std::clamp(static_cast<int>(std::floor(local)), 0, 3);
+}
+
+void advance_axis(int& cell, int step, float& next_t, float delta_t) noexcept {
+  cell += step;
+  next_t += delta_t;
+}
+
+template <typename Visitor>
+bool visit_wide_cells_dda(
+    const Aabb& bounds,
+    const glm::vec3& origin,
+    const glm::vec3& direction,
+    float t_near,
+    float t_far,
+    bool reverse,
+    Visitor&& visitor) {
+  const float clipped_near = std::max(t_near, 0.0f);
+  if (t_far < clipped_near) {
+    return true;
+  }
+
+  const float base_t = reverse ? t_far : clipped_near;
+  const float max_s = t_far - clipped_near;
+  const glm::vec3 walk_origin = origin + direction * base_t;
+  const glm::vec3 walk_direction = reverse ? -direction : direction;
+  const glm::vec3 cell_size = (bounds.max - bounds.min) * 0.25f;
+
+  int cell_x = local_cell_for_position(walk_origin.x, bounds.min.x, cell_size.x, walk_direction.x);
+  int cell_y = local_cell_for_position(walk_origin.y, bounds.min.y, cell_size.y, walk_direction.y);
+  int cell_z = local_cell_for_position(walk_origin.z, bounds.min.z, cell_size.z, walk_direction.z);
+
+  const auto axis_setup = [](float origin_axis,
+                             float direction_axis,
+                             float min_bound,
+                             float cell_size_axis,
+                             int cell,
+                             int& step,
+                             float& next_s,
+                             float& delta_s) {
+    if (std::fabs(direction_axis) <= kEpsilon) {
+      step = 0;
+      next_s = std::numeric_limits<float>::infinity();
+      delta_s = std::numeric_limits<float>::infinity();
+      return;
+    }
+    step = direction_axis > 0.0f ? 1 : -1;
+    const int boundary_index = step > 0 ? cell + 1 : cell;
+    const float boundary = min_bound + cell_size_axis * static_cast<float>(boundary_index);
+    next_s = (boundary - origin_axis) / direction_axis;
+    if (next_s < 0.0f && next_s > -8.0f * kEpsilon) {
+      next_s = 0.0f;
+    }
+    delta_s = cell_size_axis / std::fabs(direction_axis);
+  };
+
+  int step_x = 0;
+  int step_y = 0;
+  int step_z = 0;
+  float next_x = 0.0f;
+  float next_y = 0.0f;
+  float next_z = 0.0f;
+  float delta_x = 0.0f;
+  float delta_y = 0.0f;
+  float delta_z = 0.0f;
+  axis_setup(walk_origin.x, walk_direction.x, bounds.min.x, cell_size.x, cell_x, step_x, next_x, delta_x);
+  axis_setup(walk_origin.y, walk_direction.y, bounds.min.y, cell_size.y, cell_y, step_y, next_y, delta_y);
+  axis_setup(walk_origin.z, walk_direction.z, bounds.min.z, cell_size.z, cell_z, step_z, next_z, delta_z);
+
+  float current_s = 0.0f;
+  for (int iteration = 0; iteration < 96; ++iteration) {
+    if (cell_x < 0 || cell_x >= 4 || cell_y < 0 || cell_y >= 4 || cell_z < 0 || cell_z >= 4 ||
+        current_s > max_s + kEpsilon) {
+      break;
+    }
+
+    const float next_s = std::min({next_x, next_y, next_z, max_s});
+    const int child_index = cell_x | (cell_y << 2) | (cell_z << 4);
+    const glm::vec3 child_min =
+        bounds.min + cell_size * glm::vec3{static_cast<float>(cell_x), static_cast<float>(cell_y), static_cast<float>(cell_z)};
+    WideDdaCell cell;
+    cell.child_index = child_index;
+    cell.bounds = {child_min, child_min + cell_size};
+    if (reverse) {
+      cell.t_near = base_t - next_s;
+      cell.t_far = base_t - current_s;
+    } else {
+      cell.t_near = base_t + current_s;
+      cell.t_far = base_t + next_s;
+    }
+    if (!visitor(cell)) {
+      return false;
+    }
+    if (next_s >= max_s - kEpsilon) {
+      break;
+    }
+
+    current_s = next_s;
+    if (next_x <= next_y + kEpsilon && next_x <= next_z + kEpsilon) {
+      advance_axis(cell_x, step_x, next_x, delta_x);
+    } else if (next_y <= next_z + kEpsilon) {
+      advance_axis(cell_y, step_y, next_y, delta_y);
+    } else {
+      advance_axis(cell_z, step_z, next_z, delta_z);
+    }
+  }
+
+  return true;
 }
 
 float segment_sort_key(const SegmentCandidate& candidate, const RenderOptions& options) noexcept {
@@ -333,6 +454,8 @@ void traverse_wide_node(
     const Aabb& bounds,
     const glm::vec3& origin,
     const glm::vec3& direction,
+    float node_t_near,
+    float node_t_far,
     const float* sigma,
     const float* color,
     const RenderOptions& options,
@@ -353,63 +476,44 @@ void traverse_wide_node(
   const std::uint64_t child_mask = descriptor.child_mask();
   const std::uint64_t leaf_mask = descriptor.leaf_mask();
   const std::uint64_t internal_mask = descriptor.internal_child_mask();
-  std::vector<SegmentCandidate> candidates;
-  candidates.reserve(64);
 
-  for (std::uint64_t active_mask = child_mask; active_mask != 0u; active_mask &= active_mask - 1u) {
-    const int child_index = std::countr_zero(active_mask);
+  visit_wide_cells_dda(bounds, origin, direction, node_t_near, node_t_far, false, [&](const WideDdaCell& cell) {
+    if (accum.transmittance <= options.early_stop_transmittance) {
+      if (options.stats != nullptr) {
+        add_stat(options.stats->early_terminations);
+      }
+      return false;
+    }
+
+    const int child_index = cell.child_index;
     const std::uint64_t child_bit = 1ull << child_index;
     if (options.stats != nullptr) {
       add_stat(options.stats->child_candidates_tested);
     }
-
-    const Aabb child = wide_child_bounds(bounds, child_index);
-    float t_near = 0.0f;
-    float t_far = 0.0f;
-    if (!intersect_aabb(child, origin, direction, t_near, t_far)) {
-      continue;
+    if ((child_mask & child_bit) == 0u) {
+      return true;
     }
-    if (std::min(t_far, options.far_plane) <= std::max({t_near, options.near_plane, 0.0f})) {
-      continue;
+
+    if (std::min(cell.t_far, options.far_plane) <= std::max({cell.t_near, options.near_plane, 0.0f})) {
+      return true;
     }
 
     SegmentCandidate candidate;
     candidate.leaf = (leaf_mask & child_bit) != 0u;
-    candidate.bounds = child;
-    candidate.t_near = t_near;
-    candidate.t_far = t_far;
+    candidate.bounds = cell.bounds;
+    candidate.t_near = cell.t_near;
+    candidate.t_far = cell.t_far;
     if (candidate.leaf) {
       candidate.leaf_id = static_cast<std::int32_t>(
           static_cast<std::size_t>(descriptor.payload_base()) +
           static_cast<std::size_t>(prefix_rank(leaf_mask, child_index)));
       candidate.depth = octree.max_depth() - depth_remaining + 2;
+      composite_leaf(octree, sigma, color, candidate, options, accum);
+      return true;
     } else {
       candidate.node_index = static_cast<std::size_t>(descriptor.child_base()) +
           static_cast<std::size_t>(prefix_rank(internal_mask, child_index));
       candidate.depth_remaining = depth_remaining - 2;
-    }
-    candidates.push_back(candidate);
-  }
-
-  std::sort(candidates.begin(), candidates.end(), [&](const SegmentCandidate& lhs, const SegmentCandidate& rhs) {
-    const float lhs_key = segment_sort_key(lhs, options);
-    const float rhs_key = segment_sort_key(rhs, options);
-    if (std::fabs(lhs_key - rhs_key) > kEpsilon) {
-      return lhs_key < rhs_key;
-    }
-    return lhs.leaf_id < rhs.leaf_id;
-  });
-
-  for (const SegmentCandidate& candidate : candidates) {
-    if (accum.transmittance <= options.early_stop_transmittance) {
-      if (options.stats != nullptr) {
-        add_stat(options.stats->early_terminations);
-      }
-      break;
-    }
-    if (candidate.leaf) {
-      composite_leaf(octree, sigma, color, candidate, options, accum);
-    } else {
       if (options.stats != nullptr) {
         add_stat(options.stats->stack_pushes);
         update_max_stat(
@@ -423,12 +527,15 @@ void traverse_wide_node(
           candidate.bounds,
           origin,
           direction,
+          candidate.t_near,
+          candidate.t_far,
           sigma,
           color,
           options,
           accum);
     }
-  }
+    return true;
+  });
 }
 
 void render_one(
@@ -475,6 +582,8 @@ void render_one(
               root,
               origin,
               normalized,
+              root_t_near,
+              root_t_far,
               sigma,
               color,
               options,
