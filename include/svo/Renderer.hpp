@@ -51,6 +51,7 @@ struct RenderIntervalBuffer {
   DeviceBuffer<std::uint8_t> scan_temp_storage;
   std::size_t ray_count = 0;
   std::size_t interval_count = 0;
+  bool forward_aux_valid = false;
 };
 
 void render_volume_cuda(

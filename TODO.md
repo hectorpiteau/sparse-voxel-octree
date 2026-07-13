@@ -1066,6 +1066,15 @@ speed, not general sparse-layout compression.
 - [x] Add a backward-render path that consumes stored intervals from forward instead of recomputing traversal.
 - [x] Keep interval generation non-differentiable; gradients flow through payload values, not topology or interval membership.
 - [x] Separate direct and interval strategies with `render_strategy="direct"|"intervals"|"auto"`; `auto` maps to `direct` until benchmark data supports a heuristic.
+- [x] Harden interval workspace ownership so temporary overflow counters use RAII and early failures do not leak interval-only allocations.
+- [x] Track interval auxiliary validity: interval build invalidates forward aux, interval forward validates it, and interval backward fails clearly if called before forward.
+- [x] Keep compact per-interval record fields where safe:
+  - [x] `ray_index`: `uint32_t`, because interval rendering rejects ray launches at or above `INT_MAX`.
+  - [x] `leaf_id`: `int32_t`, to match existing hit/miss leaf-id conventions.
+  - [x] `payload_index`: `uint32_t`, to match stored leaf payload indices.
+  - [x] `t_start`, `t_end`, `alpha`, `transmittance`: `float`, to match current render math and payload precision.
+- [x] Keep interval `counts` and `offsets` as `uint32_t` to avoid paying 64-bit scan/storage cost in normal GPU workloads.
+- [x] Add explicit prefix-sum overflow validation before interval buffer allocation; interval mode fails clearly if total emitted intervals exceed `uint32_t` capacity.
 - [ ] Benchmark interval mode broadly before considering it for `auto` or default use.
 
 ### Optional Path — Coarse Occupancy Accelerator
@@ -1091,7 +1100,15 @@ speed, not general sparse-layout compression.
 - [ ] Forward rendering with DDA matches existing direct traversal for color, opacity, and depth.
 - [ ] Backward rendering with DDA matches existing finite-difference tests for density and color.
 - [x] Compact interval generation, if implemented, matches direct traversal compositing in focused CUDA/Python tests.
+- [x] Compact interval backward matches direct CUDA backward in focused Octree8/Wide4, early-stop, negative-density, empty-scene, and zero-ray tests.
+- [x] Interval forward supports dynamic interval counts beyond the old fixed direct-backward per-ray segment cache in focused CUDA tests.
+- [x] Interval backward-before-forward misuse fails clearly.
+- [x] Python Torch interval tests cover current-stream backward, repeated backward, and `VolumeRenderer(render_strategy="intervals")`.
 - [x] Interval overflow paths, if implemented, fail clearly and do not corrupt outputs.
+- [x] Add a narrow `scripts/check_interval_sanitizer.py` smoke target for Python interval sanitizer runs outside pytest.
+- [x] `compute-sanitizer memcheck` passes for C++ interval renderer tests on a CUDA-visible shell.
+- [ ] `compute-sanitizer initcheck` passes for C++ interval renderer tests on a stable CUDA-visible shell.
+- [ ] `compute-sanitizer memcheck/initcheck` passes for Python interval rendering tests on a stable CUDA-visible shell.
 - [ ] Optional coarse occupancy acceleration, if implemented, preserves exact render/query results relative to the non-accelerated path.
 
 ### Benchmarks
@@ -1107,6 +1124,7 @@ speed, not general sparse-layout compression.
 
 - [ ] Default rendering remains correct and tested on CPU and CUDA.
 - [ ] Differentiable rendering still supports PyTorch optimization loops.
+- [ ] Interval renderer has sanitizer-clean C++ and Python validation on a stable CUDA-visible shell.
 - [ ] Benchmarks show whether the acceleration helps, hurts, or is scene-dependent.
 - [x] Render strategies are clearly separated; interval mode stores CUDA interval/aux buffers for Torch backward reuse.
 - [ ] Deferred sparse-layout work is not mixed into the rendering acceleration milestone.

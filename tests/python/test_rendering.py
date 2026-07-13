@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import gc
+
 import numpy as np
 import pytest
 
 import svo
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_torch_cuda_after_rendering_test():
+    yield
+    gc.collect()
+    try:
+        import torch
+    except ImportError:
+        return
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+    gc.collect()
 
 
 def _torch_cuda():
@@ -426,6 +442,62 @@ def test_render_volume_torch_cuda_backward_current_stream_when_available() -> No
     assert torch.isfinite(color.grad).all()
 
 
+def test_render_volume_torch_cuda_intervals_backward_current_stream_when_available() -> None:
+    torch = _torch_cuda()
+    tree = svo.Octree.from_voxels(np.array([[0, 0, 0], [1, 0, 0]], dtype=np.int32), max_depth=1)
+    cuda_tree = tree.to("cuda")
+    origins = torch.tensor([[-1.0, 0.25, 0.25]], device="cuda", dtype=torch.float32)
+    directions = torch.tensor([[1.0, 0.0, 0.0]], device="cuda", dtype=torch.float32)
+    sigma = torch.tensor([1.0, 2.0], device="cuda", dtype=torch.float32, requires_grad=True)
+    color = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], device="cuda", dtype=torch.float32, requires_grad=True)
+    stream = torch.cuda.Stream()
+
+    with torch.cuda.stream(stream):
+        rgb, _depth, opacity = svo.render_volume(
+            cuda_tree,
+            origins,
+            directions,
+            sigma,
+            color,
+            render_strategy="intervals",
+        )
+        loss = rgb.sum() + opacity.sum()
+        loss.backward()
+
+    stream.synchronize()
+    assert sigma.grad is not None
+    assert color.grad is not None
+    assert torch.isfinite(sigma.grad).all()
+    assert torch.isfinite(color.grad).all()
+
+
+def test_render_volume_torch_cuda_intervals_repeated_backward_when_available() -> None:
+    torch = _torch_cuda()
+    tree = svo.Octree.from_voxels(np.array([[0, 0, 0], [1, 0, 0]], dtype=np.int32), max_depth=1)
+    cuda_tree = tree.to("cuda")
+    origins = torch.tensor([[-1.0, 0.25, 0.25], [-1.0, 0.75, 0.75]], device="cuda", dtype=torch.float32)
+    directions = torch.tensor([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], device="cuda", dtype=torch.float32)
+    sigma = torch.tensor([1.0, 2.0], device="cuda", dtype=torch.float32, requires_grad=True)
+    color = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], device="cuda", dtype=torch.float32, requires_grad=True)
+
+    for _ in range(2):
+        sigma.grad = None
+        color.grad = None
+        rgb, _depth, opacity = svo.render_volume(
+            cuda_tree,
+            origins,
+            directions,
+            sigma,
+            color,
+            render_strategy="intervals",
+        )
+        (rgb.sum() + opacity.sum()).backward()
+        assert sigma.grad is not None
+        assert color.grad is not None
+        assert torch.isfinite(sigma.grad).all()
+        assert torch.isfinite(color.grad).all()
+
+
 def test_volume_renderer_torch_cuda_matches_function_when_available() -> None:
     torch = _torch_cuda()
     tree = svo.Octree.from_voxels(np.array([[0, 0, 0]], dtype=np.int32), max_depth=1)
@@ -472,13 +544,13 @@ def test_volume_renderer_torch_cuda_matches_function_when_available() -> None:
 
 def test_volume_renderer_torch_cuda_backward_when_available() -> None:
     torch = _torch_cuda()
-    tree = svo.Octree.from_voxels(np.array([[0, 0, 0]], dtype=np.int32), max_depth=0)
+    tree = svo.Octree.from_voxels(np.array([[0, 0, 0], [1, 0, 0]], dtype=np.int32), max_depth=1)
     cuda_tree = tree.to("cuda")
-    origins = torch.tensor([[-1.0, 0.5, 0.5]], device="cuda", dtype=torch.float32)
-    directions = torch.tensor([[1.0, 0.0, 0.0]], device="cuda", dtype=torch.float32)
-    sigma = torch.nn.Parameter(torch.tensor([1.0], device="cuda", dtype=torch.float32))
-    color = torch.nn.Parameter(torch.tensor([[0.2, 0.4, 0.8]], device="cuda", dtype=torch.float32))
-    renderer = svo.VolumeRenderer(cuda_tree)
+    origins = torch.tensor([[-1.0, 0.25, 0.25], [-1.0, 0.75, 0.75]], device="cuda", dtype=torch.float32)
+    directions = torch.tensor([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], device="cuda", dtype=torch.float32)
+    sigma = torch.nn.Parameter(torch.tensor([1.0, 2.0], device="cuda", dtype=torch.float32))
+    color = torch.nn.Parameter(torch.tensor([[0.2, 0.4, 0.8], [0.8, 0.4, 0.2]], device="cuda", dtype=torch.float32))
+    renderer = svo.VolumeRenderer(cuda_tree, render_strategy="intervals")
 
     rgb, depth, opacity = renderer(origins, directions, sigma, color)
     loss = rgb.sum() + opacity.sum()

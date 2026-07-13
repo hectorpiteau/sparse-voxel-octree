@@ -1786,6 +1786,16 @@ __global__ void emit_render_intervals_wide_kernel(
   }
 }
 
+__global__ void check_interval_offsets_kernel(const std::uint32_t* offsets, std::size_t count, int* overflow_count) {
+  const std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index >= count) {
+    return;
+  }
+  if (offsets[index + 1u] < offsets[index]) {
+    atomicExch(overflow_count, 1);
+  }
+}
+
 __global__ void render_volume_from_intervals_kernel(
     const std::uint32_t* offsets,
     const float* t_start,
@@ -2136,9 +2146,10 @@ void render_volume_backward_cuda(
       static_cast<std::size_t>(kBlockSize));
   cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(stream);
 
-  int* device_overflow_count = nullptr;
-  check_cuda_launch(cudaMalloc(&device_overflow_count, sizeof(int)), "cudaMalloc renderer backward overflow counter");
-  check_cuda_launch(cudaMemsetAsync(device_overflow_count, 0, sizeof(int), cuda_stream), "cudaMemsetAsync renderer backward overflow counter");
+  DeviceBuffer<int> device_overflow_count(1, Device::CUDA);
+  check_cuda_launch(
+      cudaMemsetAsync(device_overflow_count.data(), 0, sizeof(int), cuda_stream),
+      "cudaMemsetAsync renderer backward overflow counter");
 
   render_volume_backward_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
       nodes,
@@ -2163,15 +2174,19 @@ void render_volume_backward_cuda(
       options.background_color,
       options.early_stop_transmittance,
       options.stats,
-      device_overflow_count);
+      device_overflow_count.data());
 
   check_cuda_launch(cudaGetLastError(), "render_volume_backward_kernel launch");
   int host_overflow_count = 0;
   check_cuda_launch(
-      cudaMemcpyAsync(&host_overflow_count, device_overflow_count, sizeof(int), cudaMemcpyDeviceToHost, cuda_stream),
+      cudaMemcpyAsync(
+          &host_overflow_count,
+          device_overflow_count.data(),
+          sizeof(int),
+          cudaMemcpyDeviceToHost,
+          cuda_stream),
       "cudaMemcpyAsync renderer backward overflow counter");
   check_cuda_launch(cudaStreamSynchronize(cuda_stream), "cudaStreamSynchronize renderer backward overflow counter");
-  check_cuda_launch(cudaFree(device_overflow_count), "cudaFree renderer backward overflow counter");
   if (host_overflow_count != 0) {
     throw Error("render_volume_backward_cuda exceeded the per-ray segment cache; reduce scene depth or split rays");
   }
@@ -2222,9 +2237,10 @@ void render_volume_backward_wide_cuda(
       static_cast<std::size_t>(kBlockSize));
   cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(stream);
 
-  int* device_overflow_count = nullptr;
-  check_cuda_launch(cudaMalloc(&device_overflow_count, sizeof(int)), "cudaMalloc renderer backward overflow counter");
-  check_cuda_launch(cudaMemsetAsync(device_overflow_count, 0, sizeof(int), cuda_stream), "cudaMemsetAsync renderer backward overflow counter");
+  DeviceBuffer<int> device_overflow_count(1, Device::CUDA);
+  check_cuda_launch(
+      cudaMemsetAsync(device_overflow_count.data(), 0, sizeof(int), cuda_stream),
+      "cudaMemsetAsync renderer backward overflow counter");
 
   render_volume_backward_wide_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
       nodes,
@@ -2249,15 +2265,19 @@ void render_volume_backward_wide_cuda(
       options.background_color,
       options.early_stop_transmittance,
       options.stats,
-      device_overflow_count);
+      device_overflow_count.data());
 
   check_cuda_launch(cudaGetLastError(), "render_volume_backward_wide_kernel launch");
   int host_overflow_count = 0;
   check_cuda_launch(
-      cudaMemcpyAsync(&host_overflow_count, device_overflow_count, sizeof(int), cudaMemcpyDeviceToHost, cuda_stream),
+      cudaMemcpyAsync(
+          &host_overflow_count,
+          device_overflow_count.data(),
+          sizeof(int),
+          cudaMemcpyDeviceToHost,
+          cuda_stream),
       "cudaMemcpyAsync renderer backward overflow counter");
   check_cuda_launch(cudaStreamSynchronize(cuda_stream), "cudaStreamSynchronize renderer backward overflow counter");
-  check_cuda_launch(cudaFree(device_overflow_count), "cudaFree renderer backward overflow counter");
   if (host_overflow_count != 0) {
     throw Error("render_volume_backward_wide_cuda exceeded the per-ray segment cache; reduce scene depth or split rays");
   }
@@ -2290,6 +2310,7 @@ void build_render_intervals_cuda(
 
   intervals.ray_count = count;
   intervals.interval_count = 0;
+  intervals.forward_aux_valid = false;
   if (count == 0) {
     intervals.counts.resize_discard(0, Device::CUDA);
     intervals.offsets.resize_discard(0, Device::CUDA);
@@ -2310,9 +2331,10 @@ void build_render_intervals_cuda(
   intervals.counts.resize_discard(count + 1u, Device::CUDA);
   intervals.offsets.resize_discard(count + 1u, Device::CUDA);
 
-  int* device_overflow_count = nullptr;
-  check_cuda_launch(cudaMalloc(&device_overflow_count, sizeof(int)), "cudaMalloc renderer interval overflow counter");
-  check_cuda_launch(cudaMemsetAsync(device_overflow_count, 0, sizeof(int), cuda_stream), "cudaMemsetAsync renderer interval overflow counter");
+  DeviceBuffer<int> device_overflow_count(1, Device::CUDA);
+  check_cuda_launch(
+      cudaMemsetAsync(device_overflow_count.data(), 0, sizeof(int), cuda_stream),
+      "cudaMemsetAsync renderer interval overflow counter");
 
   count_render_intervals_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
       nodes,
@@ -2329,7 +2351,7 @@ void build_render_intervals_cuda(
       options.near_plane,
       options.far_plane,
       options.stats,
-      device_overflow_count);
+      device_overflow_count.data());
   check_cuda_launch(cudaGetLastError(), "count_render_intervals_kernel launch");
   check_cuda_launch(
       cudaMemsetAsync(intervals.counts.data() + count, 0, sizeof(std::uint32_t), cuda_stream),
@@ -2356,6 +2378,10 @@ void build_render_intervals_cuda(
           cuda_stream),
       "cub::DeviceScan::ExclusiveSum intervals");
 
+  check_interval_offsets_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
+      intervals.offsets.data(), count, device_overflow_count.data());
+  check_cuda_launch(cudaGetLastError(), "check_interval_offsets_kernel launch");
+
   std::uint32_t host_interval_count = 0u;
   int host_overflow_count = 0;
   check_cuda_launch(
@@ -2367,12 +2393,18 @@ void build_render_intervals_cuda(
           cuda_stream),
       "cudaMemcpyAsync renderer interval count");
   check_cuda_launch(
-      cudaMemcpyAsync(&host_overflow_count, device_overflow_count, sizeof(int), cudaMemcpyDeviceToHost, cuda_stream),
+      cudaMemcpyAsync(
+          &host_overflow_count,
+          device_overflow_count.data(),
+          sizeof(int),
+          cudaMemcpyDeviceToHost,
+          cuda_stream),
       "cudaMemcpyAsync renderer interval overflow counter");
   check_cuda_launch(cudaStreamSynchronize(cuda_stream), "cudaStreamSynchronize renderer interval count");
   if (host_overflow_count != 0) {
-    check_cuda_launch(cudaFree(device_overflow_count), "cudaFree renderer interval overflow counter");
-    throw Error("build_render_intervals_cuda exceeded the traversal stack; reduce scene depth or split rays");
+    throw Error(
+        "build_render_intervals_cuda exceeded the traversal stack or interval count uint32 capacity; "
+        "reduce scene depth, split rays, or use direct rendering");
   }
 
   intervals.interval_count = static_cast<std::size_t>(host_interval_count);
@@ -2384,7 +2416,9 @@ void build_render_intervals_cuda(
   intervals.alpha.resize_discard(intervals.interval_count, Device::CUDA);
   intervals.transmittance.resize_discard(intervals.interval_count, Device::CUDA);
 
-  check_cuda_launch(cudaMemsetAsync(device_overflow_count, 0, sizeof(int), cuda_stream), "cudaMemsetAsync renderer interval emit overflow counter");
+  check_cuda_launch(
+      cudaMemsetAsync(device_overflow_count.data(), 0, sizeof(int), cuda_stream),
+      "cudaMemsetAsync renderer interval emit overflow counter");
   if (intervals.interval_count != 0) {
     emit_render_intervals_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
         nodes,
@@ -2406,16 +2440,20 @@ void build_render_intervals_cuda(
         options.near_plane,
         options.far_plane,
         options.stats,
-        device_overflow_count);
+        device_overflow_count.data());
     check_cuda_launch(cudaGetLastError(), "emit_render_intervals_kernel launch");
   }
 
   host_overflow_count = 0;
   check_cuda_launch(
-      cudaMemcpyAsync(&host_overflow_count, device_overflow_count, sizeof(int), cudaMemcpyDeviceToHost, cuda_stream),
+      cudaMemcpyAsync(
+          &host_overflow_count,
+          device_overflow_count.data(),
+          sizeof(int),
+          cudaMemcpyDeviceToHost,
+          cuda_stream),
       "cudaMemcpyAsync renderer interval emit overflow counter");
   check_cuda_launch(cudaStreamSynchronize(cuda_stream), "cudaStreamSynchronize renderer interval emit");
-  check_cuda_launch(cudaFree(device_overflow_count), "cudaFree renderer interval overflow counter");
   if (host_overflow_count != 0) {
     throw Error("build_render_intervals_cuda exceeded the traversal stack during emit; reduce scene depth or split rays");
   }
@@ -2448,6 +2486,7 @@ void build_render_intervals_wide_cuda(
 
   intervals.ray_count = count;
   intervals.interval_count = 0;
+  intervals.forward_aux_valid = false;
   if (count == 0) {
     intervals.counts.resize_discard(0, Device::CUDA);
     intervals.offsets.resize_discard(0, Device::CUDA);
@@ -2468,9 +2507,10 @@ void build_render_intervals_wide_cuda(
   intervals.counts.resize_discard(count + 1u, Device::CUDA);
   intervals.offsets.resize_discard(count + 1u, Device::CUDA);
 
-  int* device_overflow_count = nullptr;
-  check_cuda_launch(cudaMalloc(&device_overflow_count, sizeof(int)), "cudaMalloc renderer interval overflow counter");
-  check_cuda_launch(cudaMemsetAsync(device_overflow_count, 0, sizeof(int), cuda_stream), "cudaMemsetAsync renderer interval overflow counter");
+  DeviceBuffer<int> device_overflow_count(1, Device::CUDA);
+  check_cuda_launch(
+      cudaMemsetAsync(device_overflow_count.data(), 0, sizeof(int), cuda_stream),
+      "cudaMemsetAsync renderer interval overflow counter");
 
   count_render_intervals_wide_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
       nodes,
@@ -2487,7 +2527,7 @@ void build_render_intervals_wide_cuda(
       options.near_plane,
       options.far_plane,
       options.stats,
-      device_overflow_count);
+      device_overflow_count.data());
   check_cuda_launch(cudaGetLastError(), "count_render_intervals_wide_kernel launch");
   check_cuda_launch(
       cudaMemsetAsync(intervals.counts.data() + count, 0, sizeof(std::uint32_t), cuda_stream),
@@ -2514,6 +2554,10 @@ void build_render_intervals_wide_cuda(
           cuda_stream),
       "cub::DeviceScan::ExclusiveSum intervals");
 
+  check_interval_offsets_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
+      intervals.offsets.data(), count, device_overflow_count.data());
+  check_cuda_launch(cudaGetLastError(), "check_interval_offsets_kernel launch");
+
   std::uint32_t host_interval_count = 0u;
   int host_overflow_count = 0;
   check_cuda_launch(
@@ -2525,12 +2569,18 @@ void build_render_intervals_wide_cuda(
           cuda_stream),
       "cudaMemcpyAsync renderer interval count");
   check_cuda_launch(
-      cudaMemcpyAsync(&host_overflow_count, device_overflow_count, sizeof(int), cudaMemcpyDeviceToHost, cuda_stream),
+      cudaMemcpyAsync(
+          &host_overflow_count,
+          device_overflow_count.data(),
+          sizeof(int),
+          cudaMemcpyDeviceToHost,
+          cuda_stream),
       "cudaMemcpyAsync renderer interval overflow counter");
   check_cuda_launch(cudaStreamSynchronize(cuda_stream), "cudaStreamSynchronize renderer interval count");
   if (host_overflow_count != 0) {
-    check_cuda_launch(cudaFree(device_overflow_count), "cudaFree renderer interval overflow counter");
-    throw Error("build_render_intervals_wide_cuda exceeded the traversal stack; reduce scene depth or split rays");
+    throw Error(
+        "build_render_intervals_wide_cuda exceeded the traversal stack or interval count uint32 capacity; "
+        "reduce scene depth, split rays, or use direct rendering");
   }
 
   intervals.interval_count = static_cast<std::size_t>(host_interval_count);
@@ -2542,7 +2592,9 @@ void build_render_intervals_wide_cuda(
   intervals.alpha.resize_discard(intervals.interval_count, Device::CUDA);
   intervals.transmittance.resize_discard(intervals.interval_count, Device::CUDA);
 
-  check_cuda_launch(cudaMemsetAsync(device_overflow_count, 0, sizeof(int), cuda_stream), "cudaMemsetAsync renderer interval emit overflow counter");
+  check_cuda_launch(
+      cudaMemsetAsync(device_overflow_count.data(), 0, sizeof(int), cuda_stream),
+      "cudaMemsetAsync renderer interval emit overflow counter");
   if (intervals.interval_count != 0) {
     emit_render_intervals_wide_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
         nodes,
@@ -2564,16 +2616,20 @@ void build_render_intervals_wide_cuda(
         options.near_plane,
         options.far_plane,
         options.stats,
-        device_overflow_count);
+        device_overflow_count.data());
     check_cuda_launch(cudaGetLastError(), "emit_render_intervals_wide_kernel launch");
   }
 
   host_overflow_count = 0;
   check_cuda_launch(
-      cudaMemcpyAsync(&host_overflow_count, device_overflow_count, sizeof(int), cudaMemcpyDeviceToHost, cuda_stream),
+      cudaMemcpyAsync(
+          &host_overflow_count,
+          device_overflow_count.data(),
+          sizeof(int),
+          cudaMemcpyDeviceToHost,
+          cuda_stream),
       "cudaMemcpyAsync renderer interval emit overflow counter");
   check_cuda_launch(cudaStreamSynchronize(cuda_stream), "cudaStreamSynchronize renderer interval emit");
-  check_cuda_launch(cudaFree(device_overflow_count), "cudaFree renderer interval overflow counter");
   if (host_overflow_count != 0) {
     throw Error("build_render_intervals_wide_cuda exceeded the traversal stack during emit; reduce scene depth or split rays");
   }
@@ -2602,6 +2658,7 @@ void render_volume_from_intervals_cuda(
     throw ValidationError("color cannot be null when payload_rows is non-zero");
   }
   if (count == 0) {
+    intervals.forward_aux_valid = true;
     return;
   }
   check_not_null(intervals.offsets.data(), count + 1u, "interval offsets");
@@ -2632,6 +2689,7 @@ void render_volume_from_intervals_cuda(
       options.background_color,
       options.early_stop_transmittance);
   check_cuda_launch(cudaGetLastError(), "render_volume_from_intervals_kernel launch");
+  intervals.forward_aux_valid = true;
 }
 
 void render_volume_backward_from_intervals_cuda(
@@ -2649,6 +2707,9 @@ void render_volume_backward_from_intervals_cuda(
   validate_options(options);
   if (intervals.ray_count != count) {
     throw ValidationError("interval buffer ray count does not match render ray count");
+  }
+  if (!intervals.forward_aux_valid) {
+    throw ValidationError("interval buffer forward auxiliary data is not valid; run interval forward before backward");
   }
   check_not_null(grad_rgb, count, "grad_rgb");
   check_not_null(grad_opacity, count, "grad_opacity");

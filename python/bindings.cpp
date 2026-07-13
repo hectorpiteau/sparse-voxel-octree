@@ -923,6 +923,28 @@ class CudaOctreeOwner {
             host_octree.leaf_payload_indices(),
             svo::Device::CUDA)) {}
 
+  ~CudaOctreeOwner() {
+    release();
+  }
+
+  CudaOctreeOwner(const CudaOctreeOwner&) = delete;
+  CudaOctreeOwner& operator=(const CudaOctreeOwner&) = delete;
+  CudaOctreeOwner(CudaOctreeOwner&&) noexcept = default;
+  CudaOctreeOwner& operator=(CudaOctreeOwner&&) noexcept = default;
+
+  void release() noexcept {
+    try {
+      CudaDeviceGuard guard(device_index_);
+      device_nodes_.release();
+      device_wide_nodes_.release();
+      device_leaf_payload_indices_.release();
+    } catch (...) {
+      device_nodes_.release();
+      device_wide_nodes_.release();
+      device_leaf_payload_indices_.release();
+    }
+  }
+
   const svo::Octree& host_octree() const noexcept { return host_octree_; }
   int max_depth() const noexcept { return host_octree_.max_depth(); }
   std::int64_t num_nodes() const noexcept { return host_octree_.num_nodes(); }
@@ -2323,6 +2345,7 @@ Returns:
       .def_property_readonly(
           "leaf_payload_indices",
           [](const CudaOctreeOwner& octree) { return payload_indices_to_numpy(octree.host_octree().leaf_payload_indices()); })
+      .def("_release", &CudaOctreeOwner::release)
       .def("__repr__", &cuda_octree_repr);
 #endif
 

@@ -58,6 +58,7 @@ class _RenderVolumeFunction:
             @staticmethod
             def forward(ctx, origins_tensor, directions_tensor, sigma_tensor, color_tensor):
                 interval_buffer = None
+                needs_payload_backward = bool(sigma_tensor.requires_grad or color_tensor.requires_grad)
                 if render_strategy == "intervals":
                     rgb, depth, opacity, interval_buffer = tree._render_volume_intervals_torch(
                         origins_tensor,
@@ -84,21 +85,26 @@ class _RenderVolumeFunction:
                         False,
                         enable_empty_space_skipping,
                     )
-                ctx.tree = tree
+                ctx.tree = tree if needs_payload_backward else None
                 ctx.near = near
                 ctx.far = far
                 ctx.background_color = background_color
                 ctx.early_stop_transmittance = early_stop_transmittance
                 ctx.enable_empty_space_skipping = enable_empty_space_skipping
                 ctx.render_strategy = render_strategy
-                ctx.interval_buffer = interval_buffer
-                ctx.save_for_backward(origins_tensor, directions_tensor, sigma_tensor, color_tensor)
+                ctx.interval_buffer = interval_buffer if needs_payload_backward else None
+                if needs_payload_backward:
+                    ctx.save_for_backward(origins_tensor, directions_tensor, sigma_tensor, color_tensor)
                 ctx.mark_non_differentiable(depth)
                 return rgb, depth, opacity
 
             @staticmethod
             def backward(ctx, grad_rgb, grad_depth, grad_opacity):
                 del grad_depth
+                if not (ctx.needs_input_grad[2] or ctx.needs_input_grad[3]):
+                    ctx.tree = None
+                    ctx.interval_buffer = None
+                    return None, None, None, None
                 origins_tensor, directions_tensor, sigma_tensor, color_tensor = ctx.saved_tensors
                 if grad_rgb is None:
                     grad_rgb = torch.zeros(
@@ -151,6 +157,8 @@ class _RenderVolumeFunction:
                         grad_sigma = grad_sigma_tensor
                     if ctx.needs_input_grad[3]:
                         grad_color = grad_color_tensor
+                ctx.tree = None
+                ctx.interval_buffer = None
                 return None, None, grad_sigma, grad_color
 
         return _Function.apply(origins, directions, sigma, color)

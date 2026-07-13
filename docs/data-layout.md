@@ -68,11 +68,15 @@ Current:
 - Wide4 raycast and volume rendering step through each local `4 x 4 x 4`
   child grid with DDA, then use masks and popcount/rank only after an occupied
   child cell is known.
+- Experimental CUDA render intervals use a structure-of-arrays layout:
+  `ray_index: uint32_t`, `leaf_id: int32_t`, `payload_index: uint32_t`,
+  `t_start/t_end: float`, and forward aux `alpha/transmittance: float`.
+  Per-ray interval `counts` and prefix-sum `offsets` are `uint32_t`; interval
+  mode rejects scenes whose emitted interval stream would overflow that range.
 
 Planned/future:
 
 - Morton ordering for construction and locality.
-- Compact interval generation before rendering.
 - Brick leaves for dense local payloads.
 - Homogeneous tile values.
 - Relative child pointers.

@@ -156,6 +156,37 @@ Implemented secondary path:
 - CPU interval rendering is intentionally unsupported; CPU rendering remains
   direct/reference-only.
 
+Interval validation notes:
+
+- Interval records stay compact: `ray_index` and `payload_index` are
+  `uint32_t`, `leaf_id` is `int32_t`, and interval distances plus forward aux
+  values are `float`.
+- Per-ray `counts` and prefix-sum `offsets` use `uint32_t`. This keeps scan
+  bandwidth and per-ray workspace compact for realtime/GPU-memory-first use.
+  A post-scan overflow check rejects interval mode if the total emitted
+  interval stream exceeds `uint32_t` capacity.
+- Interval build invalidates saved forward aux data. Interval forward marks aux
+  data valid only after launching the compositing kernel. Interval backward
+  rejects buffers that have not run interval forward.
+- The count/scan stage intentionally synchronizes to read the total interval
+  count and overflow status before allocating the interval stream. The emit
+  stage intentionally synchronizes to read overflow status before returning.
+- Temporary overflow counters in renderer host code are owned by CUDA
+  `DeviceBuffer` RAII.
+- Sanitizer-clean C++ and Python interval runs are required before closing this
+  milestone.
+- Current local validation has C++ interval `memcheck` clean. `initcheck` still
+  needs to be rerun from a stable CUDA-visible shell because the local attempt
+  failed before the first instrumented CUDA API call. Python interval sanitizer
+  runs need separate care around Torch CUDA visibility and Torch's caching
+  allocator. Prefer the narrow smoke target below before using full pytest
+  under `compute-sanitizer`:
+
+  ```bash
+  PYTORCH_NO_CUDA_MEMORY_CACHING=1 compute-sanitizer --tool memcheck --leak-check full ./.venv/bin/python scripts/check_interval_sanitizer.py
+  PYTORCH_NO_CUDA_MEMORY_CACHING=1 compute-sanitizer --tool initcheck ./.venv/bin/python scripts/check_interval_sanitizer.py
+  ```
+
 Still open:
 
 - Record larger before/after benchmark snapshots for representative scenes and
