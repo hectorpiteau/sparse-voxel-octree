@@ -2,6 +2,7 @@
 
 #include <svo/Renderer.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -111,58 +112,141 @@ RenderRun run_octree8(
 
   svo::RenderOptions options;
   options.stats = config.profile ? device_stats.data() : nullptr;
-  time_render(
-      stream,
-      config,
-      [&]() {
-        svo::render_volume_cuda(
-            device_nodes.data(),
-            device_nodes.size(),
-            device_payload_indices.data(),
-            device_payload_indices.size(),
-            tree.max_depth(),
-            tree.root_bounds(),
-            device_origins.data(),
-            device_directions.data(),
-            device_sigma.data(),
-            device_color.data(),
-            device_rgb.data(),
-            device_depth.data(),
-            device_opacity.data(),
-            origins.size(),
-            sigma.size(),
-            options,
-            stream);
-      },
-      [&]() {
-        svo::render_volume_backward_cuda(
-            device_nodes.data(),
-            device_nodes.size(),
-            device_payload_indices.data(),
-            device_payload_indices.size(),
-            tree.max_depth(),
-            tree.root_bounds(),
-            device_origins.data(),
-            device_directions.data(),
-            device_sigma.data(),
-            device_color.data(),
-            device_grad_rgb.data(),
-            device_grad_opacity.data(),
-            device_grad_sigma.data(),
-            device_grad_color.data(),
-            origins.size(),
-            sigma.size(),
-            options,
-            stream);
-      },
-      run.metrics);
+  svo::RenderIntervalBuffer intervals;
+  if (config.render_strategy == "intervals") {
+    auto build_intervals = [&]() {
+      svo::build_render_intervals_cuda(
+          device_nodes.data(),
+          device_nodes.size(),
+          device_payload_indices.data(),
+          device_payload_indices.size(),
+          tree.max_depth(),
+          tree.root_bounds(),
+          device_origins.data(),
+          device_directions.data(),
+          origins.size(),
+          options,
+          intervals,
+          stream);
+    };
+    auto forward = [&]() {
+      svo::render_volume_from_intervals_cuda(
+          intervals,
+          device_sigma.data(),
+          device_color.data(),
+          device_rgb.data(),
+          device_depth.data(),
+          device_opacity.data(),
+          origins.size(),
+          sigma.size(),
+          options,
+          stream);
+    };
+    auto backward = [&]() {
+      svo::render_volume_backward_from_intervals_cuda(
+          intervals,
+          device_sigma.data(),
+          device_color.data(),
+          device_grad_rgb.data(),
+          device_grad_opacity.data(),
+          device_grad_sigma.data(),
+          device_grad_color.data(),
+          origins.size(),
+          sigma.size(),
+          options,
+          stream);
+    };
+
+    build_intervals();
+    forward();
+    if (run_backward(config)) {
+      backward();
+    }
+    svo_bench::check(cudaStreamSynchronize(stream), "cudaStreamSynchronize interval render warmup");
+    run.metrics.interval_build_ms = svo_bench::time_cuda_ms(stream, [&]() {
+      for (int iteration = 0; iteration < config.iterations; ++iteration) {
+        build_intervals();
+      }
+    }) / static_cast<double>(config.iterations);
+    if (run_forward(config)) {
+      run.metrics.kernel_ms = svo_bench::time_cuda_ms(stream, [&]() {
+        for (int iteration = 0; iteration < config.iterations; ++iteration) {
+          forward();
+        }
+      }) / static_cast<double>(config.iterations);
+    } else {
+      forward();
+      svo_bench::check(cudaStreamSynchronize(stream), "cudaStreamSynchronize interval forward before backward");
+    }
+    if (run_backward(config)) {
+      run.metrics.backward_kernel_ms = svo_bench::time_cuda_ms(stream, [&]() {
+        for (int iteration = 0; iteration < config.iterations; ++iteration) {
+          backward();
+        }
+      }) / static_cast<double>(config.iterations);
+    }
+    run.metrics.interval_count = static_cast<std::uint64_t>(intervals.interval_count);
+  } else {
+    time_render(
+        stream,
+        config,
+        [&]() {
+          svo::render_volume_cuda(
+              device_nodes.data(),
+              device_nodes.size(),
+              device_payload_indices.data(),
+              device_payload_indices.size(),
+              tree.max_depth(),
+              tree.root_bounds(),
+              device_origins.data(),
+              device_directions.data(),
+              device_sigma.data(),
+              device_color.data(),
+              device_rgb.data(),
+              device_depth.data(),
+              device_opacity.data(),
+              origins.size(),
+              sigma.size(),
+              options,
+              stream);
+        },
+        [&]() {
+          svo::render_volume_backward_cuda(
+              device_nodes.data(),
+              device_nodes.size(),
+              device_payload_indices.data(),
+              device_payload_indices.size(),
+              tree.max_depth(),
+              tree.root_bounds(),
+              device_origins.data(),
+              device_directions.data(),
+              device_sigma.data(),
+              device_color.data(),
+              device_grad_rgb.data(),
+              device_grad_opacity.data(),
+              device_grad_sigma.data(),
+              device_grad_color.data(),
+              origins.size(),
+              sigma.size(),
+              options,
+              stream);
+        },
+        run.metrics);
+  }
 
   run.metrics.d2h_ms = svo_bench::time_cuda_ms(stream, [&]() {
     if (config.profile) {
       device_stats.copy_to_host(&run.stats, 1, stream);
     }
+    if (config.render_strategy == "intervals" && !intervals.counts.empty()) {
+      const std::vector<std::uint32_t> interval_counts = intervals.counts.to_host(stream);
+      for (std::uint32_t value : interval_counts) {
+        run.metrics.max_intervals_per_ray = std::max(run.metrics.max_intervals_per_ray, static_cast<std::uint64_t>(value));
+      }
+    }
   });
-  run.metrics.total_wall_ms = run.metrics.h2d_ms + run.metrics.kernel_ms + run.metrics.backward_kernel_ms + run.metrics.d2h_ms;
+  run.metrics.total_wall_ms = run.metrics.h2d_ms + run.metrics.interval_build_ms + run.metrics.kernel_ms +
+      run.metrics.backward_kernel_ms + run.metrics.d2h_ms;
   return run;
 }
 
@@ -216,58 +300,141 @@ RenderRun run_wide4(
 
   svo::RenderOptions options;
   options.stats = config.profile ? device_stats.data() : nullptr;
-  time_render(
-      stream,
-      config,
-      [&]() {
-        svo::render_volume_wide_cuda(
-            device_nodes.data(),
-            device_nodes.size(),
-            device_payload_indices.data(),
-            device_payload_indices.size(),
-            tree.max_depth(),
-            tree.root_bounds(),
-            device_origins.data(),
-            device_directions.data(),
-            device_sigma.data(),
-            device_color.data(),
-            device_rgb.data(),
-            device_depth.data(),
-            device_opacity.data(),
-            origins.size(),
-            sigma.size(),
-            options,
-            stream);
-      },
-      [&]() {
-        svo::render_volume_backward_wide_cuda(
-            device_nodes.data(),
-            device_nodes.size(),
-            device_payload_indices.data(),
-            device_payload_indices.size(),
-            tree.max_depth(),
-            tree.root_bounds(),
-            device_origins.data(),
-            device_directions.data(),
-            device_sigma.data(),
-            device_color.data(),
-            device_grad_rgb.data(),
-            device_grad_opacity.data(),
-            device_grad_sigma.data(),
-            device_grad_color.data(),
-            origins.size(),
-            sigma.size(),
-            options,
-            stream);
-      },
-      run.metrics);
+  svo::RenderIntervalBuffer intervals;
+  if (config.render_strategy == "intervals") {
+    auto build_intervals = [&]() {
+      svo::build_render_intervals_wide_cuda(
+          device_nodes.data(),
+          device_nodes.size(),
+          device_payload_indices.data(),
+          device_payload_indices.size(),
+          tree.max_depth(),
+          tree.root_bounds(),
+          device_origins.data(),
+          device_directions.data(),
+          origins.size(),
+          options,
+          intervals,
+          stream);
+    };
+    auto forward = [&]() {
+      svo::render_volume_from_intervals_cuda(
+          intervals,
+          device_sigma.data(),
+          device_color.data(),
+          device_rgb.data(),
+          device_depth.data(),
+          device_opacity.data(),
+          origins.size(),
+          sigma.size(),
+          options,
+          stream);
+    };
+    auto backward = [&]() {
+      svo::render_volume_backward_from_intervals_cuda(
+          intervals,
+          device_sigma.data(),
+          device_color.data(),
+          device_grad_rgb.data(),
+          device_grad_opacity.data(),
+          device_grad_sigma.data(),
+          device_grad_color.data(),
+          origins.size(),
+          sigma.size(),
+          options,
+          stream);
+    };
+
+    build_intervals();
+    forward();
+    if (run_backward(config)) {
+      backward();
+    }
+    svo_bench::check(cudaStreamSynchronize(stream), "cudaStreamSynchronize interval render warmup");
+    run.metrics.interval_build_ms = svo_bench::time_cuda_ms(stream, [&]() {
+      for (int iteration = 0; iteration < config.iterations; ++iteration) {
+        build_intervals();
+      }
+    }) / static_cast<double>(config.iterations);
+    if (run_forward(config)) {
+      run.metrics.kernel_ms = svo_bench::time_cuda_ms(stream, [&]() {
+        for (int iteration = 0; iteration < config.iterations; ++iteration) {
+          forward();
+        }
+      }) / static_cast<double>(config.iterations);
+    } else {
+      forward();
+      svo_bench::check(cudaStreamSynchronize(stream), "cudaStreamSynchronize interval forward before backward");
+    }
+    if (run_backward(config)) {
+      run.metrics.backward_kernel_ms = svo_bench::time_cuda_ms(stream, [&]() {
+        for (int iteration = 0; iteration < config.iterations; ++iteration) {
+          backward();
+        }
+      }) / static_cast<double>(config.iterations);
+    }
+    run.metrics.interval_count = static_cast<std::uint64_t>(intervals.interval_count);
+  } else {
+    time_render(
+        stream,
+        config,
+        [&]() {
+          svo::render_volume_wide_cuda(
+              device_nodes.data(),
+              device_nodes.size(),
+              device_payload_indices.data(),
+              device_payload_indices.size(),
+              tree.max_depth(),
+              tree.root_bounds(),
+              device_origins.data(),
+              device_directions.data(),
+              device_sigma.data(),
+              device_color.data(),
+              device_rgb.data(),
+              device_depth.data(),
+              device_opacity.data(),
+              origins.size(),
+              sigma.size(),
+              options,
+              stream);
+        },
+        [&]() {
+          svo::render_volume_backward_wide_cuda(
+              device_nodes.data(),
+              device_nodes.size(),
+              device_payload_indices.data(),
+              device_payload_indices.size(),
+              tree.max_depth(),
+              tree.root_bounds(),
+              device_origins.data(),
+              device_directions.data(),
+              device_sigma.data(),
+              device_color.data(),
+              device_grad_rgb.data(),
+              device_grad_opacity.data(),
+              device_grad_sigma.data(),
+              device_grad_color.data(),
+              origins.size(),
+              sigma.size(),
+              options,
+              stream);
+        },
+        run.metrics);
+  }
 
   run.metrics.d2h_ms = svo_bench::time_cuda_ms(stream, [&]() {
     if (config.profile) {
       device_stats.copy_to_host(&run.stats, 1, stream);
     }
+    if (config.render_strategy == "intervals" && !intervals.counts.empty()) {
+      const std::vector<std::uint32_t> interval_counts = intervals.counts.to_host(stream);
+      for (std::uint32_t value : interval_counts) {
+        run.metrics.max_intervals_per_ray = std::max(run.metrics.max_intervals_per_ray, static_cast<std::uint64_t>(value));
+      }
+    }
   });
-  run.metrics.total_wall_ms = run.metrics.h2d_ms + run.metrics.kernel_ms + run.metrics.backward_kernel_ms + run.metrics.d2h_ms;
+  run.metrics.total_wall_ms = run.metrics.h2d_ms + run.metrics.interval_build_ms + run.metrics.kernel_ms +
+      run.metrics.backward_kernel_ms + run.metrics.d2h_ms;
   return run;
 }
 
@@ -285,16 +452,26 @@ void print_result(
   const double fps = active_kernel_ms > 0.0 ? 1000.0 / active_kernel_ms : 0.0;
   std::cout << "render " << branching << '\n';
   std::cout << "  operation: " << (config.operation == "default" ? "both" : config.operation) << '\n';
+  std::cout << "  render_strategy: " << config.render_strategy << '\n';
   std::cout << "  max_depth: " << tree.max_depth() << '\n';
   std::cout << "  nodes: " << svo_bench::total_nodes(tree) << '\n';
   std::cout << "  leaves: " << tree.num_leaves() << '\n';
   std::cout << "  pixels: " << config.count << '\n';
   std::cout << "  cpu_reference_wall_ms: " << run.metrics.cpu_ms << '\n';
   std::cout << "  h2d_ms: " << run.metrics.h2d_ms << '\n';
+  std::cout << "  interval_build_ms: " << run.metrics.interval_build_ms << '\n';
   std::cout << "  forward_kernel_ms: " << run.metrics.kernel_ms << '\n';
   std::cout << "  backward_kernel_ms: " << run.metrics.backward_kernel_ms << '\n';
   std::cout << "  d2h_ms: " << run.metrics.d2h_ms << '\n';
   std::cout << "  total_wall_ms: " << run.metrics.total_wall_ms << '\n';
+  if (config.render_strategy == "intervals") {
+    const double avg_intervals = config.count > 0
+        ? static_cast<double>(run.metrics.interval_count) / static_cast<double>(config.count)
+        : 0.0;
+    std::cout << "  interval_count: " << run.metrics.interval_count << '\n';
+    std::cout << "  avg_intervals_per_ray: " << avg_intervals << '\n';
+    std::cout << "  max_intervals_per_ray: " << run.metrics.max_intervals_per_ray << '\n';
+  }
   std::cout << "  pixels_per_second: " << pixels_per_second << '\n';
   std::cout << "  fps: " << fps << '\n';
   if (config.profile) {

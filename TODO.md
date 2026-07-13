@@ -942,7 +942,7 @@ change public semantics, topology layout, or differentiability behavior.
   - Low-risk implementation path:
     - Use existing `DeviceBuffer::reserve_discard` / `resize_discard` in C++ benchmark/viewer-like loops first.
     - Add optional reusable workspaces only for internal benchmarks or debug tools before adding public API surface.
-    - For the Python viewer, cache CUDA ray tensors when the camera is unchanged is not useful because the camera changes while orbiting; better future path is generating rays directly on CUDA or adding a small CUDA viewer output buffer path.
+    - For the Python viewer, cache CUDA ray tensors when the camera is unchanged is not useful because the camera changes while orbiting; better future path is generating rays directly on CUDA and displaying CUDA render output without CPU readback.
   - Estimated effort: medium for benchmark/internal reuse, high if adding public output-buffer/workspace APIs.
   - Risk: medium, because output ownership/lifetime and stream ordering can get messy if exposed publicly.
 - [ ] Review hidden host synchronization in Python/CUDA hot paths.
@@ -1052,20 +1052,21 @@ speed, not general sparse-layout compression.
 
 ### Secondary Path — Compact Render Intervals
 
-- [ ] Add only if Milestone 18 shows traversal is still a major render bottleneck after DDA.
-- [ ] Add a render prepass that traverses rays and emits compact occupied intervals.
-- [ ] Store interval records as structure-of-arrays for CUDA-friendly access:
-  - [ ] `ray_index`
-  - [ ] `t_start`
-  - [ ] `t_end`
-  - [ ] `leaf_id`
-  - [ ] `payload_index`
-- [ ] Add prefix-sum/compaction logic for variable interval counts per ray.
-- [ ] Add capacity handling and clear overflow reporting.
-- [ ] Add a forward-render kernel that consumes intervals and composites color/opacity/depth.
-- [ ] Add a backward-render path that either consumes stored intervals or recomputes intervals according to the chosen memory/performance tradeoff.
-- [ ] Keep interval generation non-differentiable; gradients flow through payload values, not topology or interval membership.
-- [ ] Separate render-only and training modes when their memory/performance tradeoffs differ.
+- [x] Add as an opt-in experimental CUDA strategy; keep direct traversal as the default stable path.
+- [x] Add a render prepass that traverses rays and emits compact occupied intervals.
+- [x] Store interval records as structure-of-arrays for CUDA-friendly access:
+  - [x] `ray_index`
+  - [x] `t_start`
+  - [x] `t_end`
+  - [x] `leaf_id`
+  - [x] `payload_index`
+- [x] Add prefix-sum/compaction logic for variable interval counts per ray.
+- [x] Add capacity handling and clear overflow reporting.
+- [x] Add a forward-render kernel that consumes intervals and composites color/opacity/depth.
+- [x] Add a backward-render path that consumes stored intervals from forward instead of recomputing traversal.
+- [x] Keep interval generation non-differentiable; gradients flow through payload values, not topology or interval membership.
+- [x] Separate direct and interval strategies with `render_strategy="direct"|"intervals"|"auto"`; `auto` maps to `direct` until benchmark data supports a heuristic.
+- [ ] Benchmark interval mode broadly before considering it for `auto` or default use.
 
 ### Optional Path — Coarse Occupancy Accelerator
 
@@ -1089,14 +1090,15 @@ speed, not general sparse-layout compression.
 - [ ] CUDA DDA traversal matches CPU DDA traversal within existing tolerances.
 - [ ] Forward rendering with DDA matches existing direct traversal for color, opacity, and depth.
 - [ ] Backward rendering with DDA matches existing finite-difference tests for density and color.
-- [ ] Compact interval generation, if implemented, matches direct traversal compositing.
-- [ ] Interval overflow paths, if implemented, fail clearly and do not corrupt outputs.
+- [x] Compact interval generation, if implemented, matches direct traversal compositing in focused CUDA/Python tests.
+- [x] Interval overflow paths, if implemented, fail clearly and do not corrupt outputs.
 - [ ] Optional coarse occupancy acceleration, if implemented, preserves exact render/query results relative to the non-accelerated path.
 
 ### Benchmarks
 
 - [ ] Compare old wide traversal vs wide DDA traversal through commit-to-commit benchmarks if needed.
-- [ ] Compare direct traversal rendering vs interval prepass + interval rendering if intervals are implemented.
+- [x] Add benchmark support for direct traversal vs interval prepass + interval rendering.
+- [ ] Record benchmark results for direct traversal vs interval prepass + interval rendering.
 - [ ] Compare with and without coarse occupancy acceleration if it is implemented.
 - [ ] Benchmark forward render and backward render separately.
 - [ ] Include realtime viewer FPS measurements for representative small, medium, and large scenes.
@@ -1106,7 +1108,7 @@ speed, not general sparse-layout compression.
 - [ ] Default rendering remains correct and tested on CPU and CUDA.
 - [ ] Differentiable rendering still supports PyTorch optimization loops.
 - [ ] Benchmarks show whether the acceleration helps, hurts, or is scene-dependent.
-- [ ] Render-only and training modes are clearly separated where their performance/memory tradeoffs differ.
+- [x] Render strategies are clearly separated; interval mode stores CUDA interval/aux buffers for Torch backward reuse.
 - [ ] Deferred sparse-layout work is not mixed into the rendering acceleration milestone.
 
 ---
@@ -1234,6 +1236,11 @@ These are useful directions but are not assigned to a milestone yet. Do not trea
 - [ ] Add hierarchical/coarse fallback interpolation for samples near sparse edges where one or more neighboring leaves are missing.
 - [ ] Compare interpolation layouts in documentation: leaf-centered, corner-valued, brick-based, and hierarchical fallback.
 - [ ] Add dense brick/tile leaves for production sparse rendering after the first measured rendering acceleration pass.
+- [ ] Add a GPU-native realtime viewer using OpenGL texture display and an ImGui/imgui-bundle UI.
+  - Render directly into a CUDA/OpenGL-interoperable texture or a CUDA output buffer that can be uploaded without NumPy/Pygame roundtrips.
+  - Keep the current Pygame viewer as a simple optional debug fallback.
+  - Show FPS, render kernel time, transfer/display time, branching mode, render strategy, node/leaf counts, and camera controls.
+  - Use this viewer to separate renderer performance from CPU readback, tonemapping, and Pygame display overhead.
 - [ ] Add relative child pointers for compact descriptors.
 - [ ] Add block-local addressing for page/block-oriented node storage.
 - [ ] Add optional contour data.

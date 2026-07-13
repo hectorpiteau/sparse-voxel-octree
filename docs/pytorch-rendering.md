@@ -54,6 +54,35 @@ Current CUDA autograd supports gradients for density (`sigma`) and RGB color
 payloads. Depth is forward-only. Topology, leaf selection, occupancy, and ray
 boundary decisions are discrete and are not differentiable.
 
+## Render Strategies
+
+The default strategy is direct traversal:
+
+```python
+rgb, depth, opacity = svo.render_volume(
+    cuda_tree,
+    origins,
+    directions,
+    sigma,
+    color,
+    render_strategy="direct",
+)
+```
+
+CUDA Torch rendering also has an experimental interval strategy:
+
+```python
+renderer = svo.VolumeRenderer(cuda_tree, render_strategy="intervals")
+rgb, depth, opacity = renderer(origins, directions, sigma, color)
+```
+
+Interval mode runs a non-differentiable traversal prepass that emits compact
+CUDA-resident leaf intervals, composites forward from those intervals, and
+reuses the saved interval buffers in backward. Gradients still flow only through
+`sigma` and `color`. CPU rendering intentionally does not implement interval
+mode. `render_strategy="auto"` currently maps to direct traversal until
+benchmark data supports a heuristic.
+
 ## Transfer Policy
 
 For hot paths, keep the tree and tensors on CUDA:

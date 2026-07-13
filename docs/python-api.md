@@ -90,8 +90,18 @@ sampled = svo.gather_payload(features, leaf_ids_cuda, fill_value=0.0)
 ## Rendering
 
 ```python
-rgb, depth, opacity = svo.render_volume(tree, origins, directions, sigma, color)
+rgb, depth, opacity = svo.render_volume(
+    tree,
+    origins,
+    directions,
+    sigma,
+    color,
+    render_strategy="direct",
+)
 ```
 
 CPU rendering uses NumPy. CUDA autograd rendering uses Torch CUDA tensors with a
-CUDA-owned tree.
+CUDA-owned tree. `render_strategy="intervals"` is an experimental CUDA Torch
+path that saves compact interval buffers for backward reuse; CPU interval
+rendering is not implemented. `render_strategy="auto"` currently maps to
+`"direct"`.

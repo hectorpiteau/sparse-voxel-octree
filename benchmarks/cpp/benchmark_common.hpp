@@ -35,6 +35,7 @@ struct BenchmarkConfig {
   std::string scene = "sparse_random";
   int grid_size = 64;
   std::string branching = "both";
+  std::string render_strategy = "direct";
   std::uint32_t seed = kDefaultSeed;
   double density = 0.035;
   int iterations = 20;
@@ -50,6 +51,9 @@ struct TimingMetrics {
   double d2h_ms = 0.0;
   double total_wall_ms = 0.0;
   double backward_kernel_ms = 0.0;
+  double interval_build_ms = 0.0;
+  std::uint64_t interval_count = 0;
+  std::uint64_t max_intervals_per_ray = 0;
 };
 
 inline void check(cudaError_t result, const char* operation) {
@@ -154,6 +158,8 @@ inline BenchmarkConfig parse_config(int argc, char** argv, std::size_t default_c
       config.grid_size = std::stoi(require_value(index, argc, argv));
     } else if (flag == "--branching") {
       config.branching = require_value(index, argc, argv);
+    } else if (flag == "--render-strategy") {
+      config.render_strategy = require_value(index, argc, argv);
     } else if (flag == "--seed") {
       config.seed = static_cast<std::uint32_t>(std::stoul(require_value(index, argc, argv)));
     } else if (flag == "--density") {
@@ -181,6 +187,12 @@ inline BenchmarkConfig parse_config(int argc, char** argv, std::size_t default_c
   }
   if (config.branching != "octree8" && config.branching != "wide4" && config.branching != "both") {
     throw std::runtime_error("--branching must be octree8, wide4, or both");
+  }
+  if (config.render_strategy == "auto") {
+    config.render_strategy = "direct";
+  }
+  if (config.render_strategy != "direct" && config.render_strategy != "intervals") {
+    throw std::runtime_error("--render-strategy must be direct, intervals, or auto");
   }
   if (config.density < 0.0 || config.density > 1.0) {
     throw std::runtime_error("--density must be in [0, 1]");
@@ -425,6 +437,7 @@ inline void append_jsonl(
   write_json_field(out, first, "density", config.density);
   write_json_field(out, first, "grid_size", config.grid_size);
   write_json_field(out, first, "branching", tree.branching() == svo::BranchingMode::Wide4 ? "wide4" : "octree8");
+  write_json_field(out, first, "render_strategy", config.render_strategy);
   write_json_field(out, first, "max_depth", tree.max_depth());
   write_json_field(out, first, "nodes", total_nodes(tree));
   write_json_field(out, first, "leaves", tree.num_leaves());
@@ -436,9 +449,12 @@ inline void append_jsonl(
   write_json_field(out, first, "cpu_reference_wall_ms", metrics.cpu_ms);
   write_json_field(out, first, "h2d_ms", metrics.h2d_ms);
   write_json_field(out, first, "kernel_ms", metrics.kernel_ms);
+  write_json_field(out, first, "interval_build_ms", metrics.interval_build_ms);
   write_json_field(out, first, "backward_kernel_ms", metrics.backward_kernel_ms);
   write_json_field(out, first, "d2h_ms", metrics.d2h_ms);
   write_json_field(out, first, "total_wall_ms", metrics.total_wall_ms);
+  write_json_field(out, first, "interval_count", metrics.interval_count);
+  write_json_field(out, first, "max_intervals_per_ray", metrics.max_intervals_per_ray);
   write_json_field(out, first, throughput_name, throughput);
   write_stats_json(out, first, stats);
   out << "}\n";
@@ -451,6 +467,7 @@ inline void print_common_header(const BenchmarkConfig& config, std::string_view 
   std::cout << "  seed: " << config.seed << '\n';
   std::cout << "  density: " << config.density << '\n';
   std::cout << "  iterations: " << config.iterations << '\n';
+  std::cout << "  render_strategy: " << config.render_strategy << '\n';
   std::cout << "  gpu: " << gpu_name() << '\n';
   std::cout << "  cuda_runtime: " << cuda_runtime_version() << '\n';
 }

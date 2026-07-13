@@ -138,6 +138,119 @@ void compare_wide_cuda_to_cpu(
   }
 }
 
+void compare_intervals_to_direct(
+    const svo::Octree& octree,
+    const std::vector<glm::vec3>& origins,
+    const std::vector<glm::vec3>& directions,
+    const std::vector<float>& sigma,
+    const std::vector<float>& color,
+    const svo::RenderOptions& options = {}) {
+  auto device_payload_indices =
+      svo::DeviceBuffer<std::uint32_t>::from_host(octree.leaf_payload_indices(), svo::Device::CUDA);
+  auto device_origins = svo::DeviceBuffer<glm::vec3>::from_host(origins, svo::Device::CUDA);
+  auto device_directions = svo::DeviceBuffer<glm::vec3>::from_host(directions, svo::Device::CUDA);
+  auto device_sigma = svo::DeviceBuffer<float>::from_host(sigma, svo::Device::CUDA);
+  auto device_color = svo::DeviceBuffer<float>::from_host(color, svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> direct_rgb(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> direct_depth(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> direct_opacity(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> interval_rgb(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> interval_depth(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> interval_opacity(origins.size(), svo::Device::CUDA);
+  svo::RenderIntervalBuffer intervals;
+
+  if (octree.branching() == svo::BranchingMode::Wide4) {
+    auto device_nodes = svo::DeviceBuffer<svo::WideNodeDescriptor>::from_host(octree.wide_nodes(), svo::Device::CUDA);
+    svo::render_volume_wide_cuda(
+        device_nodes.data(),
+        device_nodes.size(),
+        device_payload_indices.data(),
+        device_payload_indices.size(),
+        octree.max_depth(),
+        octree.root_bounds(),
+        device_origins.data(),
+        device_directions.data(),
+        device_sigma.data(),
+        device_color.data(),
+        direct_rgb.data(),
+        direct_depth.data(),
+        direct_opacity.data(),
+        origins.size(),
+        sigma.size(),
+        options);
+    svo::build_render_intervals_wide_cuda(
+        device_nodes.data(),
+        device_nodes.size(),
+        device_payload_indices.data(),
+        device_payload_indices.size(),
+        octree.max_depth(),
+        octree.root_bounds(),
+        device_origins.data(),
+        device_directions.data(),
+        origins.size(),
+        options,
+        intervals);
+  } else {
+    auto device_nodes = svo::DeviceBuffer<svo::NodeDescriptor>::from_host(octree.nodes(), svo::Device::CUDA);
+    svo::render_volume_cuda(
+        device_nodes.data(),
+        device_nodes.size(),
+        device_payload_indices.data(),
+        device_payload_indices.size(),
+        octree.max_depth(),
+        octree.root_bounds(),
+        device_origins.data(),
+        device_directions.data(),
+        device_sigma.data(),
+        device_color.data(),
+        direct_rgb.data(),
+        direct_depth.data(),
+        direct_opacity.data(),
+        origins.size(),
+        sigma.size(),
+        options);
+    svo::build_render_intervals_cuda(
+        device_nodes.data(),
+        device_nodes.size(),
+        device_payload_indices.data(),
+        device_payload_indices.size(),
+        octree.max_depth(),
+        octree.root_bounds(),
+        device_origins.data(),
+        device_directions.data(),
+        origins.size(),
+        options,
+        intervals);
+  }
+
+  svo::render_volume_from_intervals_cuda(
+      intervals,
+      device_sigma.data(),
+      device_color.data(),
+      interval_rgb.data(),
+      interval_depth.data(),
+      interval_opacity.data(),
+      origins.size(),
+      sigma.size(),
+      options);
+
+  const std::vector<glm::vec3> direct_rgb_host = direct_rgb.to_host();
+  const std::vector<float> direct_depth_host = direct_depth.to_host();
+  const std::vector<float> direct_opacity_host = direct_opacity.to_host();
+  const std::vector<glm::vec3> interval_rgb_host = interval_rgb.to_host();
+  const std::vector<float> interval_depth_host = interval_depth.to_host();
+  const std::vector<float> interval_opacity_host = interval_opacity.to_host();
+  for (std::size_t index = 0; index < origins.size(); ++index) {
+    require_vec_close(interval_rgb_host[index], direct_rgb_host[index], 2.0e-5f, "interval rgb should match direct");
+    if (std::isinf(direct_depth_host[index])) {
+      require(std::isinf(interval_depth_host[index]), "interval depth should be inf");
+    } else {
+      require_close(interval_depth_host[index], direct_depth_host[index], 2.0e-5f, "interval depth should match direct");
+    }
+    require_close(interval_opacity_host[index], direct_opacity_host[index], 2.0e-5f, "interval opacity should match direct");
+  }
+}
+
 void test_cuda_matches_cpu_for_dense_tree() {
   svo::BuildOptions build_options;
   build_options.max_depth = 1;
@@ -200,6 +313,34 @@ void test_cuda_matches_cpu_for_sparse_tree_and_clipping() {
   options.near_plane = 0.5f;
   options.far_plane = 2.0f;
   compare_cuda_to_cpu(octree, origins, directions, sigma, color, options);
+}
+
+void test_interval_forward_matches_direct_octree8() {
+  svo::BuildOptions build_options;
+  build_options.max_depth = 2;
+  const svo::Octree octree = svo::Octree::from_voxels_cpu({{0, 0, 0}, {1, 1, 1}, {3, 3, 3}}, build_options);
+  const std::vector<glm::vec3> origins{{-1.0f, 0.125f, 0.125f}, {-1.0f, 0.375f, 0.375f}, {2.0f, 0.875f, 0.875f}};
+  const std::vector<glm::vec3> directions{{1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {-1.0f, 0.0f, 0.0f}};
+  const std::vector<float> sigma{1.0f, 2.0f, 3.0f};
+  const std::vector<float> color{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+  svo::RenderOptions options;
+  options.background_color = {0.01f, 0.02f, 0.03f};
+  compare_intervals_to_direct(octree, origins, directions, sigma, color, options);
+}
+
+void test_interval_forward_matches_direct_wide4() {
+  svo::BuildOptions build_options;
+  build_options.max_depth = 4;
+  build_options.branching = svo::BranchingMode::Wide4;
+  const svo::Octree octree = svo::Octree::from_voxels_cpu({{0, 0, 0}, {4, 4, 4}, {15, 15, 15}}, build_options);
+  const std::vector<glm::vec3> origins{
+      {-1.0f, 0.03125f, 0.03125f},
+      {-1.0f, 0.28125f, 0.28125f},
+      {2.0f, 0.96875f, 0.96875f}};
+  const std::vector<glm::vec3> directions{{1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {-1.0f, 0.0f, 0.0f}};
+  const std::vector<float> sigma{1.0f, 2.0f, 3.0f};
+  const std::vector<float> color{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+  compare_intervals_to_direct(octree, origins, directions, sigma, color);
 }
 
 
@@ -367,6 +508,8 @@ int main() {
   test_cuda_matches_cpu_for_dense_tree();
   test_wide_cuda_matches_cpu();
   test_cuda_matches_cpu_for_sparse_tree_and_clipping();
+  test_interval_forward_matches_direct_octree8();
+  test_interval_forward_matches_direct_wide4();
   test_cuda_backward_single_leaf_matches_analytic_gradient();
   test_cuda_backward_negative_sigma_has_zero_gradient();
   test_wide_cuda_backward_single_leaf_matches_analytic_gradient();

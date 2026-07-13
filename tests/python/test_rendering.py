@@ -97,6 +97,10 @@ def test_render_volume_rejects_bad_numpy_inputs() -> None:
         svo.render_volume(tree, origins, directions, sigma, np.zeros((1, 4), dtype=np.float32))
     with pytest.raises(NotImplementedError, match="backward"):
         svo.render_volume(tree, origins, directions, sigma, color, store_aux=True)
+    with pytest.raises(NotImplementedError, match="Torch CUDA"):
+        svo.render_volume(tree, origins, directions, sigma, color, render_strategy="intervals")
+    with pytest.raises(ValueError, match="render_strategy"):
+        svo.render_volume(tree, origins, directions, sigma, color, render_strategy="unknown")
 
 
 def test_volume_renderer_is_exported() -> None:
@@ -146,6 +150,30 @@ def test_render_volume_torch_cuda_matches_cpu_when_available() -> None:
     np.testing.assert_allclose(opacity.cpu().numpy(), expected[2], atol=2e-5)
 
 
+def test_render_volume_torch_cuda_intervals_match_direct_when_available() -> None:
+    torch = _torch_cuda()
+    coords = np.array([[0, 0, 0], [1, 0, 0], [3, 3, 3]], dtype=np.int32)
+    tree = svo.Octree.from_voxels(coords, max_depth=2)
+    cuda_tree = tree.to("cuda")
+    origins_np = np.array([[-1.0, 0.125, 0.125], [-1.0, 0.375, 0.375], [2.0, 0.875, 0.875]], dtype=np.float32)
+    directions_np = np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]], dtype=np.float32)
+    sigma_np = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    color_np = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+
+    origins = torch.tensor(origins_np, device="cuda")
+    directions = torch.tensor(directions_np, device="cuda")
+    sigma = torch.tensor(sigma_np, device="cuda")
+    color = torch.tensor(color_np, device="cuda")
+    direct = svo.render_volume(cuda_tree, origins, directions, sigma, color, render_strategy="direct")
+    auto = svo.render_volume(cuda_tree, origins, directions, sigma, color, render_strategy="auto")
+    intervals = svo.render_volume(cuda_tree, origins, directions, sigma, color, render_strategy="intervals")
+
+    for actual, expected in zip(auto, direct):
+        torch.testing.assert_close(actual, expected)
+    for actual, expected in zip(intervals, direct):
+        torch.testing.assert_close(actual, expected, atol=2e-5, rtol=1e-5)
+
+
 def test_render_volume_torch_cuda_wide4_matches_cpu_when_available() -> None:
     torch = _torch_cuda()
     coords = np.array([[0, 0, 0], [4, 4, 4], [15, 15, 15]], dtype=np.int32)
@@ -179,6 +207,30 @@ def test_render_volume_torch_cuda_wide4_matches_cpu_when_available() -> None:
     assert color.grad is not None
     assert torch.isfinite(sigma.grad).all()
     assert torch.isfinite(color.grad).all()
+
+
+def test_render_volume_torch_cuda_wide4_intervals_match_direct_when_available() -> None:
+    torch = _torch_cuda()
+    coords = np.array([[0, 0, 0], [4, 4, 4], [15, 15, 15]], dtype=np.int32)
+    tree = svo.Octree.from_voxels(coords, max_depth=4, branching="wide4")
+    cuda_tree = tree.to("cuda")
+    origins_np = np.array(
+        [[-1.0, 0.03125, 0.03125], [-1.0, 0.28125, 0.28125], [2.0, 0.96875, 0.96875]],
+        dtype=np.float32,
+    )
+    directions_np = np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]], dtype=np.float32)
+    sigma_np = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    color_np = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+
+    origins = torch.tensor(origins_np, device="cuda")
+    directions = torch.tensor(directions_np, device="cuda")
+    sigma = torch.tensor(sigma_np, device="cuda")
+    color = torch.tensor(color_np, device="cuda")
+    direct = svo.render_volume(cuda_tree, origins, directions, sigma, color)
+    intervals = svo.render_volume(cuda_tree, origins, directions, sigma, color, render_strategy="intervals")
+
+    for actual, expected in zip(intervals, direct):
+        torch.testing.assert_close(actual, expected, atol=2e-5, rtol=1e-5)
 
 
 def test_render_volume_torch_cuda_preserves_image_shape_when_available() -> None:
@@ -232,6 +284,34 @@ def test_render_volume_torch_cuda_backward_matches_single_leaf_analytic_gradient
     assert depth.requires_grad is False
     np.testing.assert_allclose(sigma.grad.detach().cpu().numpy(), [expected_sigma], atol=2e-5)
     np.testing.assert_allclose(color.grad.detach().cpu().numpy(), np.full((1, 3), alpha, dtype=np.float32), atol=2e-5)
+
+
+def test_render_volume_torch_cuda_intervals_backward_matches_direct_when_available() -> None:
+    torch = _torch_cuda()
+    coords = np.array([[0, 0, 0], [1, 0, 0]], dtype=np.int32)
+    tree = svo.Octree.from_voxels(coords, max_depth=1)
+    cuda_tree = tree.to("cuda")
+    origins = torch.tensor([[-1.0, 0.25, 0.25], [-1.0, 0.75, 0.75]], device="cuda", dtype=torch.float32)
+    directions = torch.tensor([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], device="cuda", dtype=torch.float32)
+    sigma_direct = torch.tensor([1.0, 2.0], device="cuda", dtype=torch.float32, requires_grad=True)
+    color_direct = torch.tensor([[1.0, 0.2, 0.0], [0.0, 1.0, 0.4]], device="cuda", dtype=torch.float32, requires_grad=True)
+    sigma_intervals = sigma_direct.detach().clone().requires_grad_(True)
+    color_intervals = color_direct.detach().clone().requires_grad_(True)
+
+    rgb, _depth, opacity = svo.render_volume(cuda_tree, origins, directions, sigma_direct, color_direct)
+    (0.7 * rgb[..., 0].sum() + 0.2 * rgb[..., 1].sum() + 0.4 * opacity.sum()).backward()
+    rgb_i, _depth_i, opacity_i = svo.render_volume(
+        cuda_tree,
+        origins,
+        directions,
+        sigma_intervals,
+        color_intervals,
+        render_strategy="intervals",
+    )
+    (0.7 * rgb_i[..., 0].sum() + 0.2 * rgb_i[..., 1].sum() + 0.4 * opacity_i.sum()).backward()
+
+    torch.testing.assert_close(sigma_intervals.grad, sigma_direct.grad, atol=2e-5, rtol=1e-5)
+    torch.testing.assert_close(color_intervals.grad, color_direct.grad, atol=2e-5, rtol=1e-5)
 
 
 def test_render_volume_torch_cuda_backward_finite_difference_when_available() -> None:
@@ -363,7 +443,12 @@ def test_volume_renderer_torch_cuda_matches_function_when_available() -> None:
     directions = torch.tensor(directions_np, device="cuda", dtype=torch.float32)
     sigma = torch.tensor([1.2], device="cuda", dtype=torch.float32)
     color = torch.tensor([[0.7, 0.2, 0.1]], device="cuda", dtype=torch.float32)
-    renderer = svo.VolumeRenderer(cuda_tree, background_color=(0.01, 0.02, 0.03), early_stop_transmittance=2.0e-3)
+    renderer = svo.VolumeRenderer(
+        cuda_tree,
+        background_color=(0.01, 0.02, 0.03),
+        early_stop_transmittance=2.0e-3,
+        render_strategy="intervals",
+    )
 
     assert isinstance(renderer, torch.nn.Module)
     actual = renderer(origins, directions, sigma, color)
@@ -375,6 +460,7 @@ def test_volume_renderer_torch_cuda_matches_function_when_available() -> None:
         color,
         background_color=(0.01, 0.02, 0.03),
         early_stop_transmittance=2.0e-3,
+        render_strategy="intervals",
     )
 
     assert tuple(actual[0].shape) == (2, 2, 3)

@@ -12,6 +12,7 @@ Install viewer dependency:
 Run:
     ./.venv/bin/python examples/python/realtime_viewer.py --device auto
     ./.venv/bin/python examples/python/realtime_viewer.py --device cuda --branching wide4
+    ./.venv/bin/python examples/python/realtime_viewer.py --device cuda --branching wide4 --render-strategy intervals
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import svo
 
 RenderDevice = Literal["auto", "cpu", "cuda"]
 BranchingMode = Literal["octree8", "wide4"]
+RenderStrategy = Literal["direct", "intervals", "auto"]
 
 
 @dataclass(frozen=True)
@@ -206,6 +208,7 @@ def render_cuda(
     origins: np.ndarray,
     directions: np.ndarray,
     early_stop_transmittance: float,
+    render_strategy: RenderStrategy,
     profile: bool,
 ) -> tuple[np.ndarray, np.ndarray, FrameProfile]:
     import torch
@@ -229,6 +232,7 @@ def render_cuda(
             color,
             background_color=(0.015, 0.018, 0.026),
             early_stop_transmittance=early_stop_transmittance,
+            render_strategy=render_strategy,
         )
         if profile:
             torch.cuda.synchronize()
@@ -250,11 +254,13 @@ def draw_overlay(
     frame_ms: float,
     device: str,
     scene: ScenePayload,
+    render_strategy: str,
     profile: FrameProfile | None = None,
 ) -> None:
     lines = [
         f"{fps:6.1f} FPS  {frame_ms:5.2f} ms",
-        f"backend: {device}   branching: {scene.branching}   nodes: {scene.num_nodes}   leaves: {scene.num_leaves}",
+        f"backend: {device}   branching: {scene.branching}   strategy: {render_strategy}",
+        f"nodes: {scene.num_nodes}   leaves: {scene.num_leaves}",
         "drag: orbit   wheel: zoom   R: reset   Q/Esc: quit",
     ]
     if profile is not None:
@@ -299,6 +305,12 @@ def parse_args() -> argparse.Namespace:
         help="Tree topology to build. wide4 requires an even log2(grid-size).",
     )
     parser.add_argument(
+        "--render-strategy",
+        choices=("direct", "intervals", "auto"),
+        default="direct",
+        help="CUDA render strategy. intervals is experimental and requires --device cuda; auto currently maps to direct.",
+    )
+    parser.add_argument(
         "--profile",
         action="store_true",
         help="Show detailed frame timing in the overlay.",
@@ -319,6 +331,9 @@ def main() -> None:
         raise ValueError("wide4 requires an even log2(grid-size); use e.g. --grid-size 16, 64, or 256")
 
     device = resolve_device(args.device)
+    render_strategy = "direct" if args.render_strategy == "auto" else args.render_strategy
+    if render_strategy == "intervals" and device != "cuda":
+        raise ValueError("--render-strategy intervals requires --device cuda or --device auto resolving to CUDA")
 
     try:
         import pygame
@@ -379,6 +394,7 @@ def main() -> None:
                 origins,
                 directions,
                 args.early_stop_transmittance,
+                render_strategy=render_strategy,
                 profile=args.profile,
             )
         else:
@@ -395,7 +411,17 @@ def main() -> None:
         fps_ema = fps if fps_ema == 0.0 else 0.90 * fps_ema + 0.10 * fps
         frame_ms = frame_seconds * 1000.0
         frame_ms_ema = frame_ms if frame_ms_ema == 0.0 else 0.90 * frame_ms_ema + 0.10 * frame_ms
-        draw_overlay(pygame, screen, font, fps_ema, frame_ms_ema, device, scene, profile if args.profile else None)
+        draw_overlay(
+            pygame,
+            screen,
+            font,
+            fps_ema,
+            frame_ms_ema,
+            device,
+            scene,
+            render_strategy,
+            profile if args.profile else None,
+        )
         pygame.display.flip()
         clock.tick(0)
 

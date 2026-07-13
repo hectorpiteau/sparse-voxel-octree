@@ -54,14 +54,15 @@ Current capabilities:
 - CUDA/PyTorch tensor interop for query, raycast, payload gathering, interpolation, and differentiable volume rendering.
 - `svo.VolumeRenderer`, a small `torch.nn.Module` wrapper around the CUDA renderer.
 - Tree-level branching modes: classic 8-way octree and experimental 4x4x4 wide nodes with local DDA raycast/render traversal.
+- Experimental CUDA compact-interval rendering via `render_strategy="intervals"` for direct-vs-interval profiling and Torch backward traversal reuse.
 - CPU-first runtime-only Python wheels, source distributions, package smoke tests, and GitHub Actions CI.
 
 Still in progress:
 
 - Public CUDA wheels.
 - Serialization.
-- Further production rendering acceleration beyond the current Wide4 DDA traversal.
-- Advanced sparse layouts such as DDA interval generation, brick leaves, and VDB-style hierarchy.
+- Further production rendering acceleration and benchmark-driven strategy selection.
+- Advanced sparse layouts such as brick leaves and VDB-style hierarchy.
 
 ## What the project does
 

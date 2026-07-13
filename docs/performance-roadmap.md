@@ -45,7 +45,8 @@ Current C++ benchmark entry points:
 ```bash
 ./build-cuda/svo_point_query_benchmark --scene sparse_random --grid-size 64 --branching both --seed 20260712 --density 0.035 --iterations 20 --count 1048576 --jsonl benchmarks/results/local.jsonl
 ./build-cuda/svo_raycast_benchmark --scene sparse_random --grid-size 64 --branching both --seed 20260712 --density 0.035 --iterations 20 --count 1048576 --jsonl benchmarks/results/local.jsonl
-./build-cuda/svo_render_benchmark --operation both --scene sparse_random --grid-size 64 --branching both --seed 20260712 --density 0.035 --iterations 20 --count 262144 --jsonl benchmarks/results/local.jsonl
+./build-cuda/svo_render_benchmark --operation both --scene sparse_random --grid-size 64 --branching both --render-strategy direct --seed 20260712 --density 0.035 --iterations 20 --count 262144 --jsonl benchmarks/results/local.jsonl
+./build-cuda/svo_render_benchmark --operation both --scene sparse_random --grid-size 64 --branching both --render-strategy intervals --seed 20260712 --density 0.035 --iterations 20 --count 262144 --jsonl benchmarks/results/local.jsonl
 ```
 
 Common flags:
@@ -53,6 +54,7 @@ Common flags:
 - `--scene`: `empty`, `single_voxel`, `dense_cube`, `sphere`, or `sparse_random`.
 - `--grid-size`: power-of-two resolution, with `64`, `128`, and `256` as the standard comparison set.
 - `--branching`: `octree8`, `wide4`, or `both`.
+- `--render-strategy`: `direct`, `intervals`, or `auto` for render benchmarks.
 - `--seed`: deterministic scene/ray/point seed. Default seed is `20260712`.
 - `--density`: sparse-random occupancy probability inside the centered benchmark region.
 - `--iterations`: timed kernel iterations.
@@ -142,19 +144,24 @@ Implemented primary path:
   `candidates[64]` arrays.
 - Octree8 traversal remains unchanged.
 
+Implemented secondary path:
+
+- CUDA rendering now has an opt-in compact interval strategy:
+  `render_strategy="intervals"`.
+- Interval mode runs a count/scan/emit traversal prepass, stores compact
+  CUDA-resident interval arrays, composites forward from those intervals, and
+  reuses saved interval/aux buffers for Torch backward.
+- `render_strategy="auto"` currently maps to direct traversal. It should stay
+  conservative until benchmark data supports a scene-dependent heuristic.
+- CPU interval rendering is intentionally unsupported; CPU rendering remains
+  direct/reference-only.
+
 Still open:
 
-- Add an explicit debug comparison path if old Wide4 traversal needs to remain
-  available for side-by-side benchmarking.
 - Record larger before/after benchmark snapshots for representative scenes and
   grid sizes.
-
-Secondary path:
-
-- Compact render intervals are considered only if Milestone 18 shows traversal
-  is still a major render bottleneck after DDA.
-- Interval membership remains non-differentiable; gradients flow through payload
-  values only.
+- Compare direct traversal against interval prepass/compositing for forward and
+  backward separately before making interval mode automatic.
 
 Optional path:
 
