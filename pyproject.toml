@@ -13,7 +13,7 @@ license = { file = "LICENSE" }
 authors = [
   { name = "Hector Piteau", email = "hector.piteau@gmail.com" }
 ]
-keywords = ["cuda", "octree", "sparse-voxel-octree", "voxel", "volume-rendering"]
+keywords = ["cuda", "octree", "sparse-voxel-octree", "sparse-voxels", "voxel", "volume-rendering"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
@@ -39,9 +39,9 @@ viewer = ["pygame>=2.5"]
 torch = ["torch"]
 
 [project.urls]
-Homepage = "https://github.com/hectorpiteau/sparse-voxel-octree"
-Repository = "https://github.com/hectorpiteau/sparse-voxel-octree"
-Issues = "https://github.com/hectorpiteau/sparse-voxel-octree/issues"
+Homepage = "https://github.com/hectorpiteau/sparse-voxels"
+Repository = "https://github.com/hectorpiteau/sparse-voxels"
+Issues = "https://github.com/hectorpiteau/sparse-voxels/issues"
 
 [tool.uv]
 default-groups = []

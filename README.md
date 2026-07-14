@@ -1,16 +1,16 @@
 # Sparse Voxel Octree CUDA
 
-[![CI](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/ci.yml)
-[![Docs](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/docs.yml)
-[![GPU CI](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/gpu.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/gpu.yml)
-[![Publish](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/publish.yml/badge.svg)](https://github.com/hectorpiteau/sparse-voxel-octree/actions/workflows/publish.yml)
-[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/hectorpiteau/sparse-voxel-octree/blob/main/pyproject.toml)
-[![C++](https://img.shields.io/badge/C%2B%2B-20-blue)](https://github.com/hectorpiteau/sparse-voxel-octree/blob/main/CMakeLists.txt)
+[![CI](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/ci.yml)
+[![Docs](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/docs.yml)
+[![GPU CI](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/gpu.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/gpu.yml)
+[![Publish](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/publish.yml/badge.svg)](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/publish.yml)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/hectorpiteau/sparse-voxels/blob/main/pyproject.toml)
+[![C++](https://img.shields.io/badge/C%2B%2B-20-blue)](https://github.com/hectorpiteau/sparse-voxels/blob/main/CMakeLists.txt)
 [![CUDA](https://img.shields.io/badge/CUDA-12.x%20source%20builds-76B900)](docs/installation.md#compatibility-matrix)
 [![PyPI](https://img.shields.io/badge/PyPI-planned-lightgrey)](docs/packaging.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Documentation: <https://hectorpiteau.github.io/sparse-voxel-octree/>
+Documentation: <https://hectorpiteau.github.io/sparse-voxels/>
 
 Sparse voxel octree library with a C++20/CUDA core, pybind11 Python bindings,
 NumPy CPU APIs, CUDA traversal/rendering, and optional PyTorch CUDA autograd
@@ -119,7 +119,7 @@ uv run python -m svo.info
 ## Documentation
 
 The README is intentionally a short entry point. The full documentation is
-available online at <https://hectorpiteau.github.io/sparse-voxel-octree/> and
+available online at <https://hectorpiteau.github.io/sparse-voxels/> and
 as Markdown sources under `docs/`.
 
 | Topic | Document |

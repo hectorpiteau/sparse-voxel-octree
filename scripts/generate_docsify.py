@@ -82,7 +82,7 @@ INDEX_HTML = """<!DOCTYPE html>
   <script>
     window.$docsify = {
       name: 'Sparse Voxel Octree CUDA',
-      repo: 'hectorpiteau/sparse-voxel-octree',
+      repo: 'hectorpiteau/sparse-voxels',
       homepage: 'index.md',
       coverpage: true,
       loadSidebar: true,
@@ -120,7 +120,7 @@ def render_coverpage() -> str:
         + "# Sparse Voxel Octree CUDA\n\n"
         + "> C++20/CUDA sparse voxel octree library with pybind11 Python bindings, "
         + "NumPy CPU APIs, CUDA traversal/rendering, and optional PyTorch CUDA autograd integration.\n\n"
-        + "[GitHub](https://github.com/hectorpiteau/sparse-voxel-octree)\n"
+        + "[GitHub](https://github.com/hectorpiteau/sparse-voxels)\n"
         + "[Get Started](quickstart.md)\n"
         + "[Installation](installation.md)\n"
     )

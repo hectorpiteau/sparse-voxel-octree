@@ -83,5 +83,5 @@ jobs:
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:
-          name: sparse-voxel-octree-dist
+          name: sparse-voxels-dist
           path: dist/*

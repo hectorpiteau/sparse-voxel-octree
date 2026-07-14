@@ -6,6 +6,6 @@
 
 > C++20/CUDA sparse voxel octree library with pybind11 Python bindings, NumPy CPU APIs, CUDA traversal/rendering, and optional PyTorch CUDA autograd integration.
 
-[GitHub](https://github.com/hectorpiteau/sparse-voxel-octree)
+[GitHub](https://github.com/hectorpiteau/sparse-voxels)
 [Get Started](quickstart.md)
 [Installation](installation.md)
