@@ -1,4 +1,4 @@
-# Sparse Voxel Octree CUDA
+# Sparse Voxels Toolkit
 
 [![CI](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/ci.yml)
 [![Docs](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/hectorpiteau/sparse-voxels/actions/workflows/docs.yml)
