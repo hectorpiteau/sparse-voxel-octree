@@ -12,6 +12,7 @@ from .interpolation import sample_trilinear
 from .payload import gather_payload
 from .refinement import RefinementResult, refine_octree
 from .rendering import VolumeRenderer, render_volume
+from .serialization import LoadedSvo, load, save
 
 __all__ = [
     "__version__",
@@ -20,12 +21,15 @@ __all__ = [
     "CameraConvention",
     "CameraIntrinsics",
     "Octree",
+    "LoadedSvo",
     "RefinementResult",
     "ValidationError",
     "VolumeRenderer",
     "build_info",
     "gather_payload",
+    "load",
     "sample_trilinear",
+    "save",
     "refine_octree",
     "render_volume",
     "cuda_enabled",

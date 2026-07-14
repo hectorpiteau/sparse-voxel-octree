@@ -9,6 +9,7 @@
 #include <svo/Query.hpp>
 #include <svo/Raycast.hpp>
 #include <svo/Renderer.hpp>
+#include <svo/Serialization.hpp>
 #include <svo/Version.hpp>
 
 #include <vector>

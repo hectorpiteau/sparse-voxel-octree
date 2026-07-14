@@ -21,6 +21,7 @@ import argparse
 import math
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -151,6 +152,29 @@ def build_sphere_scene(grid_size: int, radius: float, branching: BranchingMode) 
         num_leaves=len(coords_np),
         num_nodes=tree.num_nodes,
         branching=tree.branching,
+    )
+
+
+def load_svo_scene(path: Path) -> ScenePayload:
+    loaded = svo.load(path, device="cpu")
+    payloads = loaded.payloads
+    if "sigma" not in payloads or "color" not in payloads:
+        raise ValueError(".svo scene must contain 'sigma' and 'color' payload arrays for the viewer")
+    sigma = np.ascontiguousarray(payloads["sigma"], dtype=np.float32)
+    color = np.ascontiguousarray(payloads["color"], dtype=np.float32)
+    if sigma.ndim != 1:
+        raise ValueError(".svo scene payload 'sigma' must have shape (P,)")
+    if color.ndim != 2 or color.shape[1] != 3:
+        raise ValueError(".svo scene payload 'color' must have shape (P, 3)")
+    if sigma.shape[0] != color.shape[0]:
+        raise ValueError(".svo scene payload row counts must match")
+    return ScenePayload(
+        tree=loaded.tree,
+        sigma_np=sigma,
+        color_np=color,
+        num_leaves=loaded.tree.num_leaves,
+        num_nodes=loaded.tree.num_nodes,
+        branching=loaded.tree.branching,
     )
 
 
@@ -292,6 +316,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--width", type=int, default=320, help="Viewer render width.")
     parser.add_argument("--height", type=int, default=240, help="Viewer render height.")
+    parser.add_argument("--scene", type=Path, default=None, help="Optional .svo scene file to load instead of the sphere.")
     parser.add_argument("--grid-size", type=int, default=64, help="Sphere grid size. Must be a power of two.")
     parser.add_argument("--radius", type=float, default=0.68, help="Sphere radius in root coordinates.")
     parser.add_argument("--fov-y", type=float, default=38.0, help="Vertical camera FOV in degrees.")
@@ -344,13 +369,14 @@ def main() -> None:
     args = parse_args()
     if args.width <= 0 or args.height <= 0:
         raise ValueError("width and height must be positive")
-    if args.grid_size <= 0 or args.grid_size & (args.grid_size - 1):
-        raise ValueError("grid-size must be a positive power of two")
-    if args.radius <= 0.0:
-        raise ValueError("radius must be positive")
-    max_depth = int(math.log2(args.grid_size))
-    if args.branching == "wide4" and (max_depth % 2) != 0:
-        raise ValueError("wide4 requires an even log2(grid-size); use e.g. --grid-size 16, 64, or 256")
+    if args.scene is None:
+        if args.grid_size <= 0 or args.grid_size & (args.grid_size - 1):
+            raise ValueError("grid-size must be a positive power of two")
+        if args.radius <= 0.0:
+            raise ValueError("radius must be positive")
+        max_depth = int(math.log2(args.grid_size))
+        if args.branching == "wide4" and (max_depth % 2) != 0:
+            raise ValueError("wide4 requires an even log2(grid-size); use e.g. --grid-size 16, 64, or 256")
 
     device = resolve_device(args.device)
     render_strategy = "direct" if args.render_strategy == "auto" else args.render_strategy
@@ -368,7 +394,7 @@ def main() -> None:
             "pygame is required for the real-time viewer; install it with `uv sync --extra viewer`"
         ) from error
 
-    scene = build_sphere_scene(args.grid_size, args.radius, args.branching)
+    scene = load_svo_scene(args.scene) if args.scene is not None else build_sphere_scene(args.grid_size, args.radius, args.branching)
     cuda_resources = prepare_cuda_scene(scene, args.empty_space_accelerator, args.coarse_resolution) if device == "cuda" else None
 
     pygame.init()

@@ -10,6 +10,7 @@
   * [PyTorch Rendering](pytorch-rendering.md)
   * [Architecture](architecture.md)
   * [Data Layout](data-layout.md)
+  * [File Format](file-format.md)
   * [Differentiability](differentiability.md)
   * [Performance Roadmap](performance-roadmap.md)
   * [Testing](testing.md)

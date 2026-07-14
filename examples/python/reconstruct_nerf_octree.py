@@ -535,6 +535,13 @@ def train(args: argparse.Namespace) -> None:
                 f"split={stats['split_leaves']} prune={stats['pruned_leaves']} merge={stats['merged_groups']}"
             )
 
+    if args.save_svo is not None:
+        with torch.no_grad():
+            sigma, color = render_payloads(torch, raw_sigma, raw_color)
+            args.save_svo.parent.mkdir(parents=True, exist_ok=True)
+            svo.save(args.save_svo, cuda_tree, {"sigma": sigma, "color": color})
+        print(f"saved SVO scene to {args.save_svo}")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -561,6 +568,7 @@ def parse_args() -> argparse.Namespace:
         help="World-space side length of the cubic octree root bounds.",
     )
     parser.add_argument("--save-every", type=int, default=200)
+    parser.add_argument("--save-svo", type=Path, default=None, help="Optional final .svo scene output path.")
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--refine-every", type=int, default=500)
     parser.add_argument("--refine-warmup", type=int, default=500)

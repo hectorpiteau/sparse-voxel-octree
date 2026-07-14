@@ -3,6 +3,7 @@
 #include <svo/Renderer.hpp>
 
 #include <algorithm>
+#include <cstring>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -15,6 +16,51 @@ struct RenderRun {
   svo_bench::TimingMetrics metrics;
   svo::TraversalStats stats;
 };
+
+const svo::SerializedArray* find_array(const svo::SerializedScene& scene, std::string_view name) {
+  for (const svo::SerializedArray& array : scene.arrays) {
+    if (array.name == name) {
+      return &array;
+    }
+  }
+  return nullptr;
+}
+
+std::vector<float> float_array_data(const svo::SerializedArray& array) {
+  if (array.dtype != svo::SerializedArrayDType::Float32) {
+    throw std::runtime_error("render benchmark scene payload arrays must be float32");
+  }
+  if ((array.data.size() % sizeof(float)) != 0u) {
+    throw std::runtime_error("render benchmark scene payload byte count is not float-aligned");
+  }
+  std::vector<float> values(array.data.size() / sizeof(float));
+  if (!array.data.empty()) {
+    std::memcpy(values.data(), array.data.data(), array.data.size());
+  }
+  return values;
+}
+
+void payloads_from_scene(const svo::SerializedScene& scene, std::vector<float>& sigma, std::vector<float>& color) {
+  const svo::SerializedArray* sigma_array = find_array(scene, "sigma");
+  const svo::SerializedArray* color_array = find_array(scene, "color");
+  if (sigma_array == nullptr || color_array == nullptr) {
+    throw std::runtime_error("--scene-file for render benchmark must contain 'sigma' and 'color' arrays");
+  }
+  const std::uint64_t rows = scene.tree.leaf_payload_indices().empty()
+      ? 0u
+      : static_cast<std::uint64_t>(*std::max_element(
+            scene.tree.leaf_payload_indices().begin(),
+            scene.tree.leaf_payload_indices().end())) +
+          1u;
+  if (sigma_array->shape != std::vector<std::uint64_t>{rows}) {
+    throw std::runtime_error("scene payload 'sigma' must have shape (P,)");
+  }
+  if (color_array->shape != std::vector<std::uint64_t>{rows, 3u}) {
+    throw std::runtime_error("scene payload 'color' must have shape (P, 3)");
+  }
+  sigma = float_array_data(*sigma_array);
+  color = float_array_data(*color_array);
+}
 
 bool run_forward(const svo_bench::BenchmarkConfig& config) {
   return config.operation == "default" || config.operation == "both" || config.operation == "forward";
@@ -517,6 +563,23 @@ int main(int argc, char** argv) {
   validate_operation(config);
   svo_bench::print_common_header(config, "render");
   std::cout << "  operation: " << (config.operation == "default" ? "both" : config.operation) << '\n';
+
+  if (!config.scene_file.empty()) {
+    const svo::SerializedScene scene = svo::load_svo(config.scene_file);
+    std::vector<float> sigma;
+    std::vector<float> color;
+    payloads_from_scene(scene, sigma, color);
+    std::vector<glm::vec3> origins;
+    std::vector<glm::vec3> directions;
+    svo_bench::make_rays_for_bounds(config.count, config.seed, scene.tree.root_bounds(), origins, directions);
+    svo_bench::CudaStream stream;
+    if (scene.tree.branching() == svo::BranchingMode::Wide4) {
+      print_result(config, scene.tree, run_wide4(scene.tree, origins, directions, sigma, color, stream.get(), config), "wide4");
+    } else {
+      print_result(config, scene.tree, run_octree8(scene.tree, origins, directions, sigma, color, stream.get(), config), "octree8");
+    }
+    return 0;
+  }
 
   const std::vector<glm::ivec3> coordinates = svo_bench::make_scene(config);
   std::vector<glm::vec3> origins;

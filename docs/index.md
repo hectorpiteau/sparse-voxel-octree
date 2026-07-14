@@ -13,6 +13,7 @@ directory.
 - [PyTorch Rendering](pytorch-rendering.md): CUDA tensor interop, `VolumeRenderer`, autograd behavior.
 - [Architecture](architecture.md): topology/payload split, layering, repository layout, ownership rules.
 - [Data Layout](data-layout.md): node descriptors, branching modes, payload indirection, future layout phases.
+- [File Format](file-format.md): saved `.svo` scenes, payload arrays, viewer loading, benchmark loading.
 - [Differentiability](differentiability.md): what is differentiable, what is discrete, gradient scope.
 - [Performance Roadmap](performance-roadmap.md): benchmark scenes, metrics, and acceleration decisions.
 - [Testing](testing.md): local tests, CUDA tests, numerical rules, CI expectations.

@@ -43,6 +43,7 @@ add_library(
   src/Query.cpp
   src/Raycast.cpp
   src/Renderer.cpp
+  src/Serialization.cpp
   src/Version.cpp
 )
 add_library(svo::core ALIAS svo_core)
@@ -169,6 +170,10 @@ if(BUILD_TESTING AND SVO_BUILD_TESTS)
   add_executable(svo_public_headers_test tests/cpp/test_public_headers.cpp)
   target_link_libraries(svo_public_headers_test PRIVATE svo_core)
   add_test(NAME svo_public_headers_test COMMAND svo_public_headers_test)
+
+  add_executable(svo_serialization_test tests/cpp/test_serialization.cpp)
+  target_link_libraries(svo_serialization_test PRIVATE svo_core)
+  add_test(NAME svo_serialization_test COMMAND svo_serialization_test)
 
   if(SVO_ENABLE_CUDA)
     add_executable(svo_query_cuda_test tests/cpp/test_query_cuda.cpp)

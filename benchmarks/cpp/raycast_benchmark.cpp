@@ -231,6 +231,21 @@ void print_result(
 int main(int argc, char** argv) {
   const svo_bench::BenchmarkConfig config = svo_bench::parse_config(argc, argv, 1u << 20u);
   svo_bench::print_common_header(config, "raycast");
+
+  if (!config.scene_file.empty()) {
+    const svo::SerializedScene scene = svo::load_svo(config.scene_file);
+    std::vector<glm::vec3> origins;
+    std::vector<glm::vec3> directions;
+    svo_bench::make_rays_for_bounds(config.count, config.seed, scene.tree.root_bounds(), origins, directions);
+    svo_bench::CudaStream stream;
+    if (scene.tree.branching() == svo::BranchingMode::Wide4) {
+      print_result(config, scene.tree, run_wide4(scene.tree, origins, directions, stream.get(), config), "wide4");
+    } else {
+      print_result(config, scene.tree, run_octree8(scene.tree, origins, directions, stream.get(), config), "octree8");
+    }
+    return 0;
+  }
+
   const std::vector<glm::ivec3> coordinates = svo_bench::make_scene(config);
   std::vector<glm::vec3> origins;
   std::vector<glm::vec3> directions;

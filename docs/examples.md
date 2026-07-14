@@ -43,6 +43,7 @@ Useful options:
 ```bash
 ./.venv/bin/python examples/python/realtime_viewer.py --device cuda
 ./.venv/bin/python examples/python/realtime_viewer.py --device cuda --branching wide4
+./.venv/bin/python examples/python/realtime_viewer.py --device cuda --scene outputs/nerf_octree/model.svo
 ```
 
 Controls:
@@ -51,6 +52,18 @@ Controls:
 - Mouse wheel: zoom.
 - `R`: reset camera.
 - `Q` or `Esc`: exit.
+
+## NeRF Octree Reconstruction
+
+```bash
+./.venv/bin/python examples/python/reconstruct_nerf_octree.py \
+  --data data/nerf \
+  --save-svo outputs/nerf_octree/model.svo
+```
+
+Optimizes density/color payloads from calibrated Blender/NeRF images, refines
+the Octree8 topology between optimization phases, writes debug PNGs, and can
+save the final scene as a `.svo` file for the viewer or benchmarks.
 
 ## Planned Examples
 

@@ -31,6 +31,7 @@ DOC_PAGES = [
     DocPage("PyTorch Rendering", "pytorch-rendering.md", "CUDA tensor interop, VolumeRenderer, and autograd."),
     DocPage("Architecture", "architecture.md", "Layering, ownership, repository layout, and design rules."),
     DocPage("Data Layout", "data-layout.md", "Node descriptors, branching modes, and payload indirection."),
+    DocPage("File Format", "file-format.md", "Saved .svo scenes, payload arrays, and benchmark loading."),
     DocPage("Differentiability", "differentiability.md", "Gradient scope and discrete topology limits."),
     DocPage("Performance Roadmap", "performance-roadmap.md", "Benchmark scenes, metrics, and acceleration decisions."),
     DocPage("Testing", "testing.md", "Local tests, CUDA tests, numerical rules, and CI expectations."),

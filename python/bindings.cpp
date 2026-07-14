@@ -3,6 +3,7 @@
 #include <pybind11/stl.h>
 
 #include <algorithm>
+#include <cstring>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -24,6 +25,7 @@
 #include <svo/Query.hpp>
 #include <svo/Raycast.hpp>
 #include <svo/Renderer.hpp>
+#include <svo/Serialization.hpp>
 #include <svo/Version.hpp>
 
 namespace py = pybind11;
@@ -397,6 +399,71 @@ py::array_t<float> root_bounds_to_numpy(const svo::RootBounds& bounds) {
   for (int axis = 0; axis < 3; ++axis) {
     view(0, axis) = bounds[0][axis];
     view(1, axis) = bounds[1][axis];
+  }
+  return output;
+}
+
+svo::SerializedArray serialized_array_from_numpy(const std::string& name, py::array array) {
+  if (name.empty()) {
+    throw py::value_error("payload array names cannot be empty");
+  }
+  if (!py::isinstance<py::array_t<float>>(array)) {
+    throw py::type_error("serialized payload arrays must have dtype float32");
+  }
+  if (!is_c_contiguous(array)) {
+    throw py::value_error("serialized payload arrays must be C-contiguous");
+  }
+  svo::SerializedArray result;
+  result.name = name;
+  result.dtype = svo::SerializedArrayDType::Float32;
+  result.shape.reserve(static_cast<std::size_t>(array.ndim()));
+  std::uint64_t element_count = 1;
+  for (py::ssize_t axis = 0; axis < array.ndim(); ++axis) {
+    const auto dim = static_cast<std::uint64_t>(array.shape(axis));
+    result.shape.push_back(dim);
+    if (dim == 0) {
+      element_count = 0;
+    } else if (element_count != 0) {
+      if (element_count > std::numeric_limits<std::uint64_t>::max() / dim) {
+        throw py::value_error("serialized payload array shape overflows element count");
+      }
+      element_count *= dim;
+    }
+  }
+  const std::uint64_t byte_count = element_count * static_cast<std::uint64_t>(sizeof(float));
+  if (byte_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    throw py::value_error("serialized payload array is too large");
+  }
+  result.data.resize(static_cast<std::size_t>(byte_count));
+  if (byte_count != 0) {
+    std::memcpy(result.data.data(), array.data(), static_cast<std::size_t>(byte_count));
+  }
+  return result;
+}
+
+py::array serialized_array_to_numpy(const svo::SerializedArray& array) {
+  if (array.dtype != svo::SerializedArrayDType::Float32) {
+    throw py::value_error("unsupported serialized payload dtype");
+  }
+  std::vector<py::ssize_t> shape;
+  shape.reserve(array.shape.size());
+  for (const std::uint64_t dim : array.shape) {
+    if (dim > static_cast<std::uint64_t>(std::numeric_limits<py::ssize_t>::max())) {
+      throw py::value_error("serialized payload array dimension is too large for Python");
+    }
+    shape.push_back(static_cast<py::ssize_t>(dim));
+  }
+  py::array_t<float> output(shape);
+  if (!array.data.empty()) {
+    std::memcpy(output.mutable_data(), array.data.data(), array.data.size());
+  }
+  return output;
+}
+
+py::dict serialized_arrays_to_python(const std::vector<svo::SerializedArray>& arrays) {
+  py::dict output;
+  for (const svo::SerializedArray& array : arrays) {
+    output[py::str(array.name)] = serialized_array_to_numpy(array);
   }
   return output;
 }
@@ -2583,6 +2650,49 @@ Build a CUDA-resident coarse occupancy grid for debug/benchmark rendering.
       .def_property_readonly("device_index", &CudaCoarseOccupancyOwner::device_index)
       .def("_release", &CudaCoarseOccupancyOwner::release);
 #endif
+
+  module.def(
+      "_save_svo",
+      [](const std::string& path, const svo::Octree& tree, py::dict payloads) {
+        svo::SerializedScene scene;
+        scene.tree = tree;
+        scene.arrays.reserve(static_cast<std::size_t>(payloads.size()));
+        for (const auto& item : payloads) {
+          const std::string name = py::cast<std::string>(item.first);
+          py::array array = py::array::ensure(item.second);
+          if (!array) {
+            throw py::type_error("payload values must be convertible to NumPy arrays");
+          }
+          scene.arrays.push_back(serialized_array_from_numpy(name, array));
+        }
+        py::gil_scoped_release release;
+        svo::save_svo(path, scene);
+      },
+      py::arg("path"),
+      py::arg("tree"),
+      py::arg("payloads") = py::dict(),
+      R"pbdoc(
+Save a CPU octree and optional float32 payload arrays to a versioned .svo file.
+
+This private binding is wrapped by ``svo.save``.
+)pbdoc");
+
+  module.def(
+      "_load_svo",
+      [](const std::string& path) {
+        svo::SerializedScene scene;
+        {
+          py::gil_scoped_release release;
+          scene = svo::load_svo(path);
+        }
+        return py::make_tuple(std::move(scene.tree), serialized_arrays_to_python(scene.arrays));
+      },
+      py::arg("path"),
+      R"pbdoc(
+Load a versioned .svo file as (Octree, payload_dict).
+
+This private binding is wrapped by ``svo.load``.
+)pbdoc");
 
   module.def(
       "_sample_trilinear_cpu",

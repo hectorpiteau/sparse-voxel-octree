@@ -1280,7 +1280,8 @@ These are useful directions but are not assigned to a milestone yet. Do not trea
 - [ ] Add block-local addressing for page/block-oriented node storage.
 - [ ] Add optional contour data.
 - [ ] Add optional compressed attributes.
-- [ ] Add serialization format and tests.
+- [x] Add plain versioned `.svo` serialization format and tests.
+- [ ] Add optional compressed serialization once file size or distribution needs justify it.
 
 ---
 

@@ -10,8 +10,9 @@ The current decision is:
 - Milestone 19 has started with measured `Wide4` local DDA/HDDA traversal for
   raycast, forward render, and backward render.
 - Dense bricks, compact descriptors, block-local addressing, contour data,
-  compressed attributes, and serialization stay deferred unless profiling proves
-  one of them is the immediate bottleneck.
+  compressed attributes stay deferred unless profiling proves one of them is
+  the immediate bottleneck. A plain `.svo` scene format is available for loading
+  reconstructed scenes into viewers and benchmarks.
 
 ## Benchmark Scenes
 
@@ -47,11 +48,13 @@ Current C++ benchmark entry points:
 ./build-cuda/svo_raycast_benchmark --scene sparse_random --grid-size 64 --branching both --seed 20260712 --density 0.035 --iterations 20 --count 1048576 --jsonl benchmarks/results/local.jsonl
 ./build-cuda/svo_render_benchmark --operation both --scene sparse_random --grid-size 64 --branching both --render-strategy direct --seed 20260712 --density 0.035 --iterations 20 --count 262144 --jsonl benchmarks/results/local.jsonl
 ./build-cuda/svo_render_benchmark --operation both --scene sparse_random --grid-size 64 --branching both --render-strategy intervals --seed 20260712 --density 0.035 --iterations 20 --count 262144 --jsonl benchmarks/results/local.jsonl
+./build-cuda/svo_render_benchmark --operation forward --scene-file outputs/nerf_octree/model.svo --iterations 20 --count 262144 --jsonl benchmarks/results/local.jsonl
 ```
 
 Common flags:
 
 - `--scene`: `empty`, `single_voxel`, `dense_cube`, `sphere`, or `sparse_random`.
+- `--scene-file`: load a saved `.svo` scene instead of generating a synthetic scene.
 - `--grid-size`: power-of-two resolution, with `64`, `128`, and `256` as the standard comparison set.
 - `--branching`: `octree8`, `wide4`, or `both`.
 - `--render-strategy`: `direct`, `intervals`, or `auto` for render benchmarks.
@@ -122,7 +125,7 @@ Not allowed:
 - No compact descriptor redesign.
 - No relative child pointers.
 - No block-local addressing.
-- No serialization format.
+- No compression or memory-mapped serialization work.
 - No compact interval rendering rewrite.
 - No topology-changing acceleration unless a new plan promotes it explicitly.
 

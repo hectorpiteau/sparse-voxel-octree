@@ -3,6 +3,7 @@
 #include <svo/CoarseOccupancy.hpp>
 #include <svo/DeviceBuffer.hpp>
 #include <svo/Octree.hpp>
+#include <svo/Serialization.hpp>
 
 #include <cuda_runtime_api.h>
 #include <glm/ext/vector_float3.hpp>
@@ -34,6 +35,7 @@ constexpr std::uint32_t kDefaultSeed = 20260712u;
 struct BenchmarkConfig {
   std::string operation = "default";
   std::string scene = "sparse_random";
+  std::string scene_file;
   int grid_size = 64;
   std::string branching = "both";
   std::string render_strategy = "direct";
@@ -158,6 +160,8 @@ inline BenchmarkConfig parse_config(int argc, char** argv, std::size_t default_c
       config.operation = require_value(index, argc, argv);
     } else if (flag == "--scene") {
       config.scene = require_value(index, argc, argv);
+    } else if (flag == "--scene-file") {
+      config.scene_file = require_value(index, argc, argv);
     } else if (flag == "--grid-size") {
       config.grid_size = std::stoi(require_value(index, argc, argv));
     } else if (flag == "--branching") {
@@ -212,7 +216,11 @@ inline BenchmarkConfig parse_config(int argc, char** argv, std::size_t default_c
   if (config.density < 0.0 || config.density > 1.0) {
     throw std::runtime_error("--density must be in [0, 1]");
   }
-  parse_max_depth(config.grid_size, config.branching == "wide4" ? "wide4" : "octree8");
+  if (!config.scene_file.empty()) {
+    config.scene = "file";
+  } else {
+    parse_max_depth(config.grid_size, config.branching == "wide4" ? "wide4" : "octree8");
+  }
   return config;
 }
 
@@ -356,6 +364,32 @@ inline void make_rays(
   }
 }
 
+inline void make_rays_for_bounds(
+    std::size_t count,
+    std::uint32_t seed,
+    const svo::RootBounds& bounds,
+    std::vector<glm::vec3>& origins,
+    std::vector<glm::vec3>& directions) {
+  std::mt19937 rng(seed ^ 0x7217a57du);
+  std::uniform_real_distribution<float> uv_dist(0.05f, 0.95f);
+  std::uniform_real_distribution<float> jitter_dist(-0.12f, 0.12f);
+  const glm::vec3 extent = bounds[1] - bounds[0];
+  const glm::vec3 center = (bounds[0] + bounds[1]) * 0.5f;
+  origins.clear();
+  directions.clear();
+  origins.reserve(count);
+  directions.reserve(count);
+  for (std::size_t index = 0; index < count; ++index) {
+    const float y = bounds[0].y + uv_dist(rng) * extent.y;
+    const float z = bounds[0].z + uv_dist(rng) * extent.z;
+    origins.push_back({bounds[0].x - 0.35f * extent.x, y, z});
+    directions.push_back(glm::normalize(glm::vec3{
+        1.0f,
+        (center.y - y) / extent.x + jitter_dist(rng),
+        (center.z - z) / extent.x + jitter_dist(rng)}));
+  }
+}
+
 inline void make_payloads(const svo::Octree& octree, std::vector<float>& sigma, std::vector<float>& color) {
   sigma.resize(octree.num_leaves());
   color.resize(octree.num_leaves() * 3u);
@@ -484,6 +518,9 @@ inline void append_jsonl(
   write_json_field(out, first, "schema", "svo_benchmark_v1");
   write_json_field(out, first, "operation", operation);
   write_json_field(out, first, "scene", config.scene);
+  if (!config.scene_file.empty()) {
+    write_json_field(out, first, "scene_file", config.scene_file);
+  }
   write_json_field(out, first, "scene_version", kSceneVersion);
   write_json_field(out, first, "seed", config.seed);
   write_json_field(out, first, "density", config.density);
@@ -518,6 +555,9 @@ inline void append_jsonl(
 inline void print_common_header(const BenchmarkConfig& config, std::string_view name) {
   std::cout << name << " benchmark\n";
   std::cout << "  scene: " << config.scene << " v" << kSceneVersion << '\n';
+  if (!config.scene_file.empty()) {
+    std::cout << "  scene_file: " << config.scene_file << '\n';
+  }
   std::cout << "  grid_size: " << config.grid_size << '\n';
   std::cout << "  seed: " << config.seed << '\n';
   std::cout << "  density: " << config.density << '\n';

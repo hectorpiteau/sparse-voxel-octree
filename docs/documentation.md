@@ -58,6 +58,7 @@ Temporary static export folders are ignored by `.gitignore`.
 - [PyTorch Rendering](pytorch-rendering.md): CUDA tensor interop, VolumeRenderer, and autograd.
 - [Architecture](architecture.md): Layering, ownership, repository layout, and design rules.
 - [Data Layout](data-layout.md): Node descriptors, branching modes, and payload indirection.
+- [File Format](file-format.md): Saved .svo scenes, payload arrays, and benchmark loading.
 - [Differentiability](differentiability.md): Gradient scope and discrete topology limits.
 - [Performance Roadmap](performance-roadmap.md): Benchmark scenes, metrics, and acceleration decisions.
 - [Testing](testing.md): Local tests, CUDA tests, numerical rules, and CI expectations.
