@@ -1158,6 +1158,17 @@ Goal: publish a minimal useful release.
 - [ ] CUDA raycast.
 - [ ] Torch tensor support.
 
+### Adaptive reconstruction support
+
+- [x] Add variable-depth `Octree8` leaf specs.
+- [x] Add `Octree.from_leaf_specs(...)` and `tree.leaf_specs`.
+- [x] Add `Octree.full_grid(...)` for coarse reconstruction initialization.
+- [x] Add experimental `svo.refine_octree(...)` rebuild-and-replace refinement.
+- [x] Keep payload remapping CUDA-resident for Torch CUDA tensors.
+- [x] Mark topology refinement as non-differentiable and `Octree8`-only.
+- [ ] Add contribution/visibility-based leaf scores after density-based refinement is stable.
+- [ ] Build the first NeRF Lego reconstruction example on top of adaptive refinement.
+
 ### Release checklist
 
 - [ ] Version bumped.

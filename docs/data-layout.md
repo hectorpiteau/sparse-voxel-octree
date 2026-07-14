@@ -57,6 +57,22 @@ leaf_id -> payload_index
 This allows users to compact, reorder, or share payload buffers independently of
 topology.
 
+## Adaptive Leaf Specs
+
+Adaptive `Octree8` trees can be rebuilt from variable-depth leaves:
+
+```text
+LeafSpec = coord_min: int3, depth: int, payload_index: uint32
+```
+
+`coord_min` is expressed in the global `[0, 2^max_depth)` coordinate grid and
+must be aligned to the leaf cell size for `depth`. V1 adaptive refinement uses
+a rebuild-and-replace model: split/prune/merge decisions create a new leaf spec
+list, compact descriptors are rebuilt, and payload tensors are remapped outside
+the descriptor storage. `Wide4` adaptive refinement is intentionally deferred.
+Root-level adaptive leaves with a deeper split budget are also deferred; use
+`leaf_depth >= 1` for reconstruction initialization.
+
 ## Current and Future Layout Phases
 
 Current:
@@ -77,6 +93,9 @@ Current:
   bitset over `16^3`, `32^3`, or `64^3` macro cells. It is derived from the
   existing tree topology and does not change descriptors, payload ordering, or
   public octree semantics.
+- Experimental adaptive `Octree8` topology rebuilds support variable-depth
+  leaves through leaf specs. The topology update is non-differentiable; payload
+  tensors are copied, split, pruned, or merged between optimization phases.
 
 Planned/future:
 

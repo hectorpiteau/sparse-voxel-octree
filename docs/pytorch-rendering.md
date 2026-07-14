@@ -54,6 +54,22 @@ Current CUDA autograd supports gradients for density (`sigma`) and RGB color
 payloads. Depth is forward-only. Topology, leaf selection, occupancy, and ray
 boundary decisions are discrete and are not differentiable.
 
+## Adaptive Topology
+
+Adaptive reconstruction uses a discrete rebuild phase between optimization
+segments. A typical loop is:
+
+1. Optimize `sigma` and `color` with `VolumeRenderer`.
+2. Pause under `torch.no_grad()`.
+3. Call `svo.refine_octree(...)` with density or leaf contribution scores.
+4. Replace `cuda_tree`, `sigma`, `color`, and recreate `VolumeRenderer`.
+5. Continue optimization.
+
+This follows the PlenOctrees/Plenoxels style: continuous payload values are
+differentiable, but split/prune/merge topology decisions are thresholded
+structure updates. V1 supports `Octree8` only and requires one payload row per
+leaf.
+
 ## Render Strategies
 
 The default strategy is direct traversal:

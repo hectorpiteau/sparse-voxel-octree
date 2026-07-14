@@ -61,6 +61,12 @@ struct BuildOptions {
   BranchingMode branching = BranchingMode::Octree8;
 };
 
+struct LeafSpec {
+  glm::ivec3 coord_min{};
+  int depth = 0;
+  std::uint32_t payload_index = 0u;
+};
+
 struct QueryOptions {
   bool return_payload_indices = false;
   TraversalStats* stats = nullptr;
@@ -179,7 +185,8 @@ class Octree {
       Device device,
       RootBounds root_bounds,
       std::vector<NodeDescriptor> nodes,
-      std::vector<std::uint32_t> leaf_payload_indices);
+      std::vector<std::uint32_t> leaf_payload_indices,
+      std::vector<LeafSpec> leaf_specs = {});
   Octree(
       int max_depth,
       Device device,
@@ -187,7 +194,8 @@ class Octree {
       BranchingMode branching,
       std::vector<NodeDescriptor> nodes,
       std::vector<WideNodeDescriptor> wide_nodes,
-      std::vector<std::uint32_t> leaf_payload_indices);
+      std::vector<std::uint32_t> leaf_payload_indices,
+      std::vector<LeafSpec> leaf_specs = {});
 
   static Octree from_voxels_cpu(
       const std::vector<glm::ivec3>& coordinates,
@@ -196,6 +204,10 @@ class Octree {
   static Octree from_voxels_cpu(
       const std::vector<glm::ivec3>& coordinates,
       const std::vector<std::uint32_t>& payload_indices,
+      const BuildOptions& options);
+
+  static Octree from_leaf_specs_cpu(
+      const std::vector<LeafSpec>& leaf_specs,
       const BuildOptions& options);
 
   int max_depth() const noexcept { return max_depth_; }
@@ -216,6 +228,7 @@ class Octree {
   const std::vector<std::uint32_t>& leaf_payload_indices() const noexcept {
     return leaf_payload_indices_;
   }
+  const std::vector<LeafSpec>& leaf_specs() const noexcept { return leaf_specs_; }
 
   void validate() const;
 
@@ -227,6 +240,7 @@ class Octree {
   std::vector<NodeDescriptor> nodes_;
   std::vector<WideNodeDescriptor> wide_nodes_;
   std::vector<std::uint32_t> leaf_payload_indices_;
+  std::vector<LeafSpec> leaf_specs_;
 };
 
 void validate_octree(const Octree& octree);

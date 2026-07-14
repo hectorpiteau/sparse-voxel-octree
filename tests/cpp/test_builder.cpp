@@ -219,6 +219,50 @@ int main() {
     svo::BuildOptions options;
     options.max_depth = 3;
 
+    const std::vector<svo::LeafSpec> specs{
+        svo::LeafSpec{glm::ivec3{0, 0, 0}, 1, 0u},
+        svo::LeafSpec{glm::ivec3{4, 4, 4}, 3, 1u},
+    };
+    const svo::Octree octree = svo::Octree::from_leaf_specs_cpu(specs, options);
+    require(octree.num_leaves() == 2, "variable-depth leaf specs should produce two leaves");
+    require(octree.leaf_specs().size() == 2, "leaf specs should be stored in leaf order");
+    require(octree.leaf_specs()[0].depth == 1, "first variable leaf should preserve depth");
+    require(octree.leaf_specs()[1].depth == 3, "second variable leaf should preserve depth");
+  }
+
+  {
+    svo::BuildOptions options;
+    options.max_depth = 3;
+    try {
+      (void)svo::Octree::from_leaf_specs_cpu(
+          {
+              svo::LeafSpec{glm::ivec3{0, 0, 0}, 1, 0u},
+              svo::LeafSpec{glm::ivec3{1, 1, 1}, 3, 1u},
+          },
+          options);
+      std::cerr << "expected overlapping leaf specs to fail\n";
+      return 1;
+    } catch (const svo::ValidationError& error) {
+      require(
+          std::string(error.what()).find("overlap") != std::string::npos,
+          "unexpected overlap validation error");
+    }
+
+    try {
+      (void)svo::Octree::from_leaf_specs_cpu({svo::LeafSpec{glm::ivec3{1, 0, 0}, 1, 0u}}, options);
+      std::cerr << "expected unaligned leaf spec to fail\n";
+      return 1;
+    } catch (const svo::ValidationError& error) {
+      require(
+          std::string(error.what()).find("aligned") != std::string::npos,
+          "unexpected alignment validation error");
+    }
+  }
+
+  {
+    svo::BuildOptions options;
+    options.max_depth = 3;
+
     const std::vector<glm::ivec3> coordinates{
         glm::ivec3{7, 7, 7},
         glm::ivec3{0, 0, 0},

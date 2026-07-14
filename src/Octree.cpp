@@ -61,13 +61,15 @@ Octree::Octree(
     Device device,
     RootBounds root_bounds,
     std::vector<NodeDescriptor> nodes,
-    std::vector<std::uint32_t> leaf_payload_indices)
+    std::vector<std::uint32_t> leaf_payload_indices,
+    std::vector<LeafSpec> leaf_specs)
     : max_depth_(max_depth),
       device_(device),
       branching_(BranchingMode::Octree8),
       root_bounds_(std::move(root_bounds)),
       nodes_(std::move(nodes)),
-      leaf_payload_indices_(std::move(leaf_payload_indices)) {}
+      leaf_payload_indices_(std::move(leaf_payload_indices)),
+      leaf_specs_(std::move(leaf_specs)) {}
 
 Octree::Octree(
     int max_depth,
@@ -76,14 +78,16 @@ Octree::Octree(
     BranchingMode branching,
     std::vector<NodeDescriptor> nodes,
     std::vector<WideNodeDescriptor> wide_nodes,
-    std::vector<std::uint32_t> leaf_payload_indices)
+    std::vector<std::uint32_t> leaf_payload_indices,
+    std::vector<LeafSpec> leaf_specs)
     : max_depth_(max_depth),
       device_(device),
       branching_(branching),
       root_bounds_(std::move(root_bounds)),
       nodes_(std::move(nodes)),
       wide_nodes_(std::move(wide_nodes)),
-      leaf_payload_indices_(std::move(leaf_payload_indices)) {}
+      leaf_payload_indices_(std::move(leaf_payload_indices)),
+      leaf_specs_(std::move(leaf_specs)) {}
 
 void Octree::validate() const {
   validate_octree(*this);
@@ -118,6 +122,9 @@ void validate_octree(const Octree& octree) {
   }
 
   const std::size_t num_payloads = octree.leaf_payload_indices().size();
+  if (!octree.leaf_specs().empty() && octree.leaf_specs().size() != num_payloads) {
+    throw ValidationError("leaf_specs size must match leaf payload index count");
+  }
 
   if (octree.branching() == BranchingMode::Wide4) {
     const std::size_t num_nodes = octree.wide_nodes().size();

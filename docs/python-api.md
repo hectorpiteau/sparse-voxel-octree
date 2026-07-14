@@ -15,6 +15,7 @@ svo.CameraConvention
 svo.BranchingMode
 svo.VolumeRenderer
 svo.render_volume
+svo.refine_octree
 svo.sample_trilinear
 svo.gather_payload
 svo.cuda_enabled
@@ -45,6 +46,28 @@ wide4 = svo.Octree.from_voxels(coords, max_depth=8, branching="wide4")
 ```
 
 `wide4` requires an even `max_depth`.
+
+Adaptive `Octree8` construction can use variable-depth leaf specs:
+
+```python
+tree = svo.Octree.from_leaf_specs(
+    coord_min,
+    depths,
+    payload_indices,
+    max_depth=8,
+)
+```
+
+`tree.leaf_specs` returns `(coord_min, depths, payload_indices)` in leaf order.
+For reconstruction experiments, initialize a coarse grid while preserving a
+deeper split budget:
+
+```python
+tree = svo.Octree.full_grid(max_depth=8, leaf_depth=3)
+```
+
+`leaf_depth=0` is only supported when `max_depth=0` in the current descriptor
+model; use `leaf_depth=1` or deeper for adaptive reconstruction.
 
 ## Query
 
@@ -105,3 +128,25 @@ CUDA-owned tree. `render_strategy="intervals"` is an experimental CUDA Torch
 path that saves compact interval buffers for backward reuse; CPU interval
 rendering is not implemented. `render_strategy="auto"` currently maps to
 `"direct"`.
+
+## Adaptive Refinement
+
+`svo.refine_octree(...)` performs a discrete rebuild-and-replace topology step:
+
+```python
+result = svo.refine_octree(
+    tree,
+    sigma,
+    color,
+    split_threshold=1.0,
+    prune_threshold=0.01,
+    merge_threshold=0.05,
+)
+tree = result.tree
+sigma = result.sigma
+color = result.color
+```
+
+CUDA Torch payload remapping stays on CUDA when called with a CUDA-owned tree.
+The compact topology is rebuilt on CPU from leaf specs and reuploaded. V1 is
+experimental, `Octree8`-only, and requires one payload row per leaf.

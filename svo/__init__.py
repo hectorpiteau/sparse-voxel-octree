@@ -10,6 +10,7 @@ except PackageNotFoundError:
 from ._svo import BranchingMode, Camera, CameraConvention, CameraIntrinsics, Octree, ValidationError
 from .interpolation import sample_trilinear
 from .payload import gather_payload
+from .refinement import RefinementResult, refine_octree
 from .rendering import VolumeRenderer, render_volume
 
 __all__ = [
@@ -19,11 +20,13 @@ __all__ = [
     "CameraConvention",
     "CameraIntrinsics",
     "Octree",
+    "RefinementResult",
     "ValidationError",
     "VolumeRenderer",
     "build_info",
     "gather_payload",
     "sample_trilinear",
+    "refine_octree",
     "render_volume",
     "cuda_enabled",
 ]

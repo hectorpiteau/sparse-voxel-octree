@@ -146,6 +146,54 @@ std::vector<std::uint32_t> payload_indices_from_numpy(const py::array& array, py
   return payload_indices;
 }
 
+std::vector<int> depths_from_numpy(const py::array& array, py::ssize_t expected_count) {
+  if (array.ndim() != 1) {
+    throw py::value_error("depths must have shape (N,)");
+  }
+  if (array.shape(0) != expected_count) {
+    throw py::value_error("depths must have the same length as coord_min");
+  }
+  if (!(py::isinstance<py::array_t<std::int32_t>>(array) || py::isinstance<py::array_t<std::int64_t>>(array))) {
+    throw py::type_error("depths must have dtype int32 or int64");
+  }
+  if (!is_c_contiguous(array)) {
+    throw py::value_error("depths must be C-contiguous");
+  }
+
+  std::vector<int> depths;
+  depths.reserve(static_cast<std::size_t>(array.shape(0)));
+  if (py::isinstance<py::array_t<std::int32_t>>(array)) {
+    py::array_t<std::int32_t, py::array::c_style> cast(array);
+    auto view = cast.unchecked<1>();
+    for (py::ssize_t index = 0; index < view.shape(0); ++index) {
+      depths.push_back(static_cast<int>(view(index)));
+    }
+  } else {
+    py::array_t<std::int64_t, py::array::c_style> cast(array);
+    auto view = cast.unchecked<1>();
+    for (py::ssize_t index = 0; index < view.shape(0); ++index) {
+      depths.push_back(static_cast<int>(view(index)));
+    }
+  }
+  return depths;
+}
+
+std::vector<svo::LeafSpec> leaf_specs_from_numpy(
+    const py::array& coord_min,
+    const py::array& depths,
+    const py::array& payload_indices) {
+  const std::vector<glm::ivec3> coords = coordinates_from_numpy(coord_min);
+  const std::vector<int> depth_values = depths_from_numpy(depths, coord_min.shape(0));
+  const std::vector<std::uint32_t> payload_values = payload_indices_from_numpy(payload_indices, coord_min.shape(0));
+
+  std::vector<svo::LeafSpec> specs;
+  specs.reserve(coords.size());
+  for (std::size_t index = 0; index < coords.size(); ++index) {
+    specs.push_back(svo::LeafSpec{coords[index], depth_values[index], payload_values[index]});
+  }
+  return specs;
+}
+
 std::vector<glm::vec3> points_from_numpy(const py::array& array) {
   if (array.ndim() != 2 || array.shape(1) != 3) {
     throw py::value_error("points must have shape (N, 3)");
@@ -323,6 +371,24 @@ py::array_t<std::int32_t> payload_indices_to_numpy(const std::vector<std::uint32
     view(index) = static_cast<std::int32_t>(values[static_cast<std::size_t>(index)]);
   }
   return output;
+}
+
+py::tuple leaf_specs_to_numpy(const std::vector<svo::LeafSpec>& specs) {
+  py::array_t<std::int32_t> coord_min({static_cast<py::ssize_t>(specs.size()), py::ssize_t{3}});
+  py::array_t<std::int32_t> depths(specs.size());
+  py::array_t<std::int32_t> payload_indices(specs.size());
+  auto coord_view = coord_min.mutable_unchecked<2>();
+  auto depth_view = depths.mutable_unchecked<1>();
+  auto payload_view = payload_indices.mutable_unchecked<1>();
+  for (py::ssize_t index = 0; index < depth_view.shape(0); ++index) {
+    const svo::LeafSpec& spec = specs[static_cast<std::size_t>(index)];
+    coord_view(index, 0) = spec.coord_min.x;
+    coord_view(index, 1) = spec.coord_min.y;
+    coord_view(index, 2) = spec.coord_min.z;
+    depth_view(index) = static_cast<std::int32_t>(spec.depth);
+    payload_view(index) = static_cast<std::int32_t>(spec.payload_index);
+  }
+  return py::make_tuple(coord_min, depths, payload_indices);
 }
 
 py::array_t<float> root_bounds_to_numpy(const svo::RootBounds& bounds) {
@@ -2077,6 +2143,102 @@ Args:
     payload_indices: Optional int array with shape (N,) mapping each input voxel to an external payload row.
     branching: "octree8" for the classic 2x2x2 tree or "wide4" for 4x4x4 nodes.
 )pbdoc")
+      .def_static(
+          "from_leaf_specs",
+          [](py::array coord_min,
+             py::array depths,
+             py::array payload_indices,
+             int max_depth,
+             const std::string& device,
+             py::object root_bounds,
+             const std::string& branching) {
+            if (device != "cpu") {
+              throw py::value_error("Octree.from_leaf_specs currently supports only device='cpu'; build on CPU and use to('cuda')");
+            }
+            svo::BuildOptions options;
+            options.max_depth = max_depth;
+            options.device = svo::Device::CPU;
+            options.root_bounds = root_bounds_from_python(root_bounds);
+            options.branching = branching_from_python(branching);
+            const std::vector<svo::LeafSpec> specs = leaf_specs_from_numpy(coord_min, depths, payload_indices);
+            svo::Octree octree;
+            {
+              py::gil_scoped_release release;
+              octree = svo::Octree::from_leaf_specs_cpu(specs, options);
+            }
+            return octree;
+          },
+          py::arg("coord_min"),
+          py::arg("depths"),
+          py::arg("payload_indices"),
+          py::arg("max_depth"),
+          py::arg("device") = "cpu",
+          py::arg("root_bounds") = py::none(),
+          py::arg("branching") = "octree8",
+          R"pbdoc(
+Build a CPU octree from variable-depth leaf specs.
+)pbdoc")
+      .def_static(
+          "full_grid",
+          [](int max_depth, int leaf_depth, py::object root_bounds, const std::string& branching) {
+            if (branching != "octree8") {
+              throw py::value_error("Octree.full_grid currently supports only branching='octree8'");
+            }
+            if (max_depth < 0 || max_depth > 30) {
+              throw py::value_error("max_depth must be in the range [0, 30]");
+            }
+            if (leaf_depth < 0 || leaf_depth > max_depth) {
+              throw py::value_error("leaf_depth must satisfy 0 <= leaf_depth <= max_depth");
+            }
+            if (max_depth > 0 && leaf_depth == 0) {
+              throw py::value_error("leaf_depth=0 is only supported when max_depth=0");
+            }
+            const std::int64_t count_per_axis = static_cast<std::int64_t>(1) << leaf_depth;
+            const std::int64_t total_count = count_per_axis * count_per_axis * count_per_axis;
+            if (total_count > static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max())) {
+              throw py::value_error("full_grid leaf count exceeds int32 payload index range");
+            }
+            std::vector<svo::LeafSpec> specs;
+            specs.reserve(static_cast<std::size_t>(total_count));
+            const int cell_size = 1 << (max_depth - leaf_depth);
+            std::uint32_t payload_index = 0u;
+            for (std::int64_t z = 0; z < count_per_axis; ++z) {
+              for (std::int64_t y = 0; y < count_per_axis; ++y) {
+                for (std::int64_t x = 0; x < count_per_axis; ++x) {
+                  specs.push_back(svo::LeafSpec{
+                      glm::ivec3{
+                          static_cast<int>(x) * cell_size,
+                          static_cast<int>(y) * cell_size,
+                          static_cast<int>(z) * cell_size},
+                      leaf_depth,
+                      payload_index++});
+                }
+              }
+            }
+            svo::BuildOptions options;
+            options.max_depth = max_depth;
+            options.device = svo::Device::CPU;
+            options.root_bounds = root_bounds_from_python(root_bounds);
+            options.branching = svo::BranchingMode::Octree8;
+            svo::Octree octree;
+            {
+              py::gil_scoped_release release;
+              octree = svo::Octree::from_leaf_specs_cpu(specs, options);
+              std::vector<svo::LeafSpec> ordered_specs = octree.leaf_specs();
+              for (std::size_t index = 0; index < ordered_specs.size(); ++index) {
+                ordered_specs[index].payload_index = static_cast<std::uint32_t>(index);
+              }
+              octree = svo::Octree::from_leaf_specs_cpu(ordered_specs, options);
+            }
+            return octree;
+          },
+          py::arg("max_depth"),
+          py::arg("leaf_depth"),
+          py::arg("root_bounds") = py::none(),
+          py::arg("branching") = "octree8",
+          R"pbdoc(
+Build a dense coarse octree8 leaf grid while preserving a deeper max_depth budget.
+)pbdoc")
       .def(
           "query",
           [](const svo::Octree& octree, py::array points, bool return_payload_indices) {
@@ -2242,6 +2404,9 @@ keep octree topology resident on the GPU.
       .def_property_readonly(
           "leaf_payload_indices",
           [](const svo::Octree& octree) { return payload_indices_to_numpy(octree.leaf_payload_indices()); })
+      .def_property_readonly(
+          "leaf_specs",
+          [](const svo::Octree& octree) { return leaf_specs_to_numpy(octree.leaf_specs()); })
       .def("__repr__", &octree_repr);
 
 #if SVO_ENABLE_CUDA
@@ -2399,6 +2564,9 @@ Returns:
       .def_property_readonly(
           "leaf_payload_indices",
           [](const CudaOctreeOwner& octree) { return payload_indices_to_numpy(octree.host_octree().leaf_payload_indices()); })
+      .def_property_readonly(
+          "leaf_specs",
+          [](const CudaOctreeOwner& octree) { return leaf_specs_to_numpy(octree.host_octree().leaf_specs()); })
       .def(
           "_coarse_occupancy",
           &CudaOctreeOwner::coarse_occupancy,
