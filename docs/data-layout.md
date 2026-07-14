@@ -73,6 +73,10 @@ Current:
   `t_start/t_end: float`, and forward aux `alpha/transmittance: float`.
   Per-ray interval `counts` and prefix-sum `offsets` are `uint32_t`; interval
   mode rejects scenes whose emitted interval stream would overflow that range.
+- Optional coarse occupancy acceleration uses a separate CUDA-resident packed
+  bitset over `16^3`, `32^3`, or `64^3` macro cells. It is derived from the
+  existing tree topology and does not change descriptors, payload ordering, or
+  public octree semantics.
 
 Planned/future:
 

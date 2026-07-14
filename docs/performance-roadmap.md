@@ -196,8 +196,26 @@ Still open:
 
 Optional path:
 
-- A coarse occupancy or macro-cell accelerator is considered only if profiling
-  shows tree entry through empty space dominates large scenes.
+- CUDA now has an optional coarse occupancy accelerator for benchmark/debug
+  runs. It builds a packed CUDA-resident macro-cell bitset from existing
+  Octree8/Wide4 topology.
+- Benchmark flags:
+
+  ```bash
+  ./build-cuda/svo_raycast_benchmark --branching wide4 --scene sphere --grid-size 64 --count 262144 --iterations 20 --empty-space-accelerator coarse --coarse-resolution 32 --profile
+  ./build-cuda/svo_render_benchmark --operation forward --branching wide4 --scene sphere --grid-size 64 --count 262144 --iterations 20 --empty-space-accelerator coarse --coarse-resolution 32 --profile
+  ```
+
+- Raycast uses macro-cell DDA and enters clipped tree traversal only for
+  occupied macro cells.
+- Direct render currently uses a conservative variant: macro-cell DDA skips
+  fully empty rays, then falls back to exact direct traversal after the first
+  occupied macro cell. More aggressive clipped render traversal is deferred
+  until profiling proves the accelerator is worth deepening.
+- `render_strategy="intervals"` is intentionally not wired to coarse occupancy
+  yet.
+- Coarse occupancy should remain off by default until benchmarks show it helps
+  representative large sparse scenes without dense-scene regressions.
 
 Deferred:
 

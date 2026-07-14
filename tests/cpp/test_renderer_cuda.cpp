@@ -1,3 +1,4 @@
+#include <svo/CoarseOccupancy.hpp>
 #include <svo/DeviceBuffer.hpp>
 #include <svo/Octree.hpp>
 #include <svo/Renderer.hpp>
@@ -136,6 +137,119 @@ void compare_wide_cuda_to_cpu(
       require_close(cuda_depth[index], cpu.depth[index], 2.0e-5f, "wide CUDA depth should match CPU");
     }
     require_close(cuda_opacity[index], cpu.opacity[index], 2.0e-5f, "wide CUDA opacity should match CPU");
+  }
+}
+
+void compare_coarse_cuda_to_direct(
+    const svo::Octree& octree,
+    const std::vector<glm::vec3>& origins,
+    const std::vector<glm::vec3>& directions,
+    const std::vector<float>& sigma,
+    const std::vector<float>& color) {
+  auto device_payload_indices =
+      svo::DeviceBuffer<std::uint32_t>::from_host(octree.leaf_payload_indices(), svo::Device::CUDA);
+  auto device_origins = svo::DeviceBuffer<glm::vec3>::from_host(origins, svo::Device::CUDA);
+  auto device_directions = svo::DeviceBuffer<glm::vec3>::from_host(directions, svo::Device::CUDA);
+  auto device_sigma = svo::DeviceBuffer<float>::from_host(sigma, svo::Device::CUDA);
+  auto device_color = svo::DeviceBuffer<float>::from_host(color, svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> direct_rgb(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> direct_depth(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> direct_opacity(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<glm::vec3> coarse_rgb(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> coarse_depth(origins.size(), svo::Device::CUDA);
+  svo::DeviceBuffer<float> coarse_opacity(origins.size(), svo::Device::CUDA);
+  const svo::CoarseOccupancyGrid coarse_grid = svo::CoarseOccupancyGrid::from_octree(octree, 16);
+  svo::DeviceCoarseOccupancyGrid device_coarse(coarse_grid);
+  const svo::CoarseOccupancyDeviceView coarse_view = device_coarse.view();
+  svo::RenderOptions coarse_options;
+  coarse_options.coarse_occupancy = &coarse_view;
+
+  if (octree.branching() == svo::BranchingMode::Wide4) {
+    auto device_nodes = svo::DeviceBuffer<svo::WideNodeDescriptor>::from_host(octree.wide_nodes(), svo::Device::CUDA);
+    svo::render_volume_wide_cuda(
+        device_nodes.data(),
+        device_nodes.size(),
+        device_payload_indices.data(),
+        device_payload_indices.size(),
+        octree.max_depth(),
+        octree.root_bounds(),
+        device_origins.data(),
+        device_directions.data(),
+        device_sigma.data(),
+        device_color.data(),
+        direct_rgb.data(),
+        direct_depth.data(),
+        direct_opacity.data(),
+        origins.size(),
+        sigma.size());
+    svo::render_volume_wide_cuda(
+        device_nodes.data(),
+        device_nodes.size(),
+        device_payload_indices.data(),
+        device_payload_indices.size(),
+        octree.max_depth(),
+        octree.root_bounds(),
+        device_origins.data(),
+        device_directions.data(),
+        device_sigma.data(),
+        device_color.data(),
+        coarse_rgb.data(),
+        coarse_depth.data(),
+        coarse_opacity.data(),
+        origins.size(),
+        sigma.size(),
+        coarse_options);
+  } else {
+    auto device_nodes = svo::DeviceBuffer<svo::NodeDescriptor>::from_host(octree.nodes(), svo::Device::CUDA);
+    svo::render_volume_cuda(
+        device_nodes.data(),
+        device_nodes.size(),
+        device_payload_indices.data(),
+        device_payload_indices.size(),
+        octree.max_depth(),
+        octree.root_bounds(),
+        device_origins.data(),
+        device_directions.data(),
+        device_sigma.data(),
+        device_color.data(),
+        direct_rgb.data(),
+        direct_depth.data(),
+        direct_opacity.data(),
+        origins.size(),
+        sigma.size());
+    svo::render_volume_cuda(
+        device_nodes.data(),
+        device_nodes.size(),
+        device_payload_indices.data(),
+        device_payload_indices.size(),
+        octree.max_depth(),
+        octree.root_bounds(),
+        device_origins.data(),
+        device_directions.data(),
+        device_sigma.data(),
+        device_color.data(),
+        coarse_rgb.data(),
+        coarse_depth.data(),
+        coarse_opacity.data(),
+        origins.size(),
+        sigma.size(),
+        coarse_options);
+  }
+
+  const std::vector<glm::vec3> direct_rgb_host = direct_rgb.to_host();
+  const std::vector<float> direct_depth_host = direct_depth.to_host();
+  const std::vector<float> direct_opacity_host = direct_opacity.to_host();
+  const std::vector<glm::vec3> coarse_rgb_host = coarse_rgb.to_host();
+  const std::vector<float> coarse_depth_host = coarse_depth.to_host();
+  const std::vector<float> coarse_opacity_host = coarse_opacity.to_host();
+  for (std::size_t index = 0; index < origins.size(); ++index) {
+    require_vec_close(coarse_rgb_host[index], direct_rgb_host[index], 3.0e-5f, "coarse render rgb should match direct");
+    if (std::isinf(direct_depth_host[index])) {
+      require(std::isinf(coarse_depth_host[index]), "coarse render depth should be inf");
+    } else {
+      require_close(coarse_depth_host[index], direct_depth_host[index], 3.0e-5f, "coarse render depth should match direct");
+    }
+    require_close(coarse_opacity_host[index], direct_opacity_host[index], 3.0e-5f, "coarse render opacity should match direct");
   }
 }
 
@@ -432,6 +546,59 @@ void test_wide_cuda_matches_cpu() {
   svo::RenderOptions options;
   options.background_color = {0.01f, 0.02f, 0.03f};
   compare_wide_cuda_to_cpu(octree, origins, directions, sigma, color, options);
+}
+
+void test_coarse_accelerated_render_matches_direct() {
+  std::vector<glm::ivec3> coordinates;
+  for (int z = 4; z < 12; ++z) {
+    for (int y = 4; y < 12; ++y) {
+      for (int x = 4; x < 12; ++x) {
+        const int dx = x - 8;
+        const int dy = y - 8;
+        const int dz = z - 8;
+        if (dx * dx + dy * dy + dz * dz <= 18) {
+          coordinates.emplace_back(x, y, z);
+        }
+      }
+    }
+  }
+  const std::vector<glm::vec3> origins{
+      {-1.0f, 0.5f, 0.5f},
+      {-1.0f, 0.25f, 0.5f},
+      {-1.0f, 0.5f, 0.25f},
+      {-1.0f, 0.9f, 0.9f},
+      {0.5f, 0.5f, 0.5f},
+  };
+  const std::vector<glm::vec3> directions{
+      {1.0f, 0.0f, 0.0f},
+      {1.0f, 0.15f, 0.0f},
+      {1.0f, 0.0f, 0.15f},
+      {1.0f, 0.0f, 0.0f},
+      {1.0f, 0.0f, 0.0f},
+  };
+
+  svo::BuildOptions options;
+  options.max_depth = 4;
+  const svo::Octree octree8 = svo::Octree::from_voxels_cpu(coordinates, options);
+  std::vector<float> sigma(octree8.num_leaves(), 1.25f);
+  std::vector<float> color(octree8.num_leaves() * 3u, 0.0f);
+  for (std::size_t index = 0; index < octree8.num_leaves(); ++index) {
+    color[index * 3u + 0u] = static_cast<float>((index % 3u) == 0u);
+    color[index * 3u + 1u] = static_cast<float>((index % 3u) == 1u);
+    color[index * 3u + 2u] = static_cast<float>((index % 3u) == 2u);
+  }
+  compare_coarse_cuda_to_direct(octree8, origins, directions, sigma, color);
+
+  options.branching = svo::BranchingMode::Wide4;
+  const svo::Octree wide4 = svo::Octree::from_voxels_cpu(coordinates, options);
+  sigma.assign(wide4.num_leaves(), 1.25f);
+  color.assign(wide4.num_leaves() * 3u, 0.0f);
+  for (std::size_t index = 0; index < wide4.num_leaves(); ++index) {
+    color[index * 3u + 0u] = static_cast<float>((index % 3u) == 0u);
+    color[index * 3u + 1u] = static_cast<float>((index % 3u) == 1u);
+    color[index * 3u + 2u] = static_cast<float>((index % 3u) == 2u);
+  }
+  compare_coarse_cuda_to_direct(wide4, origins, directions, sigma, color);
 }
 
 void test_cuda_matches_cpu_for_sparse_tree_and_clipping() {
@@ -776,6 +943,7 @@ void test_wide_cuda_backward_single_leaf_matches_analytic_gradient() {
 int main() {
   test_cuda_matches_cpu_for_dense_tree();
   test_wide_cuda_matches_cpu();
+  test_coarse_accelerated_render_matches_direct();
   test_cuda_matches_cpu_for_sparse_tree_and_clipping();
   test_interval_forward_matches_direct_octree8();
   test_interval_forward_matches_direct_wide4();

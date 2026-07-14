@@ -51,6 +51,7 @@ class _RenderVolumeFunction:
         early_stop_transmittance: float,
         enable_empty_space_skipping: bool,
         render_strategy: str,
+        coarse_occupancy: Any | None,
     ) -> tuple[Any, Any, Any]:
         import torch
 
@@ -84,6 +85,7 @@ class _RenderVolumeFunction:
                         early_stop_transmittance,
                         False,
                         enable_empty_space_skipping,
+                        coarse_occupancy,
                     )
                 ctx.tree = tree if needs_payload_backward else None
                 ctx.near = near
@@ -178,6 +180,7 @@ def render_volume(
     store_aux: bool = False,
     enable_empty_space_skipping: bool = True,
     render_strategy: str = "direct",
+    coarse_occupancy: Any | None = None,
 ) -> tuple[Any, Any, Any]:
     """Render leaf sigma/color payloads along ray batches.
 
@@ -192,8 +195,12 @@ def render_volume(
         raise NotImplementedError("renderer aux buffers are not exposed; backward recomputes traversal")
 
     strategy = _normalize_render_strategy(render_strategy)
+    if coarse_occupancy is not None and strategy == "intervals":
+        raise NotImplementedError("coarse_occupancy is only implemented for render_strategy='direct'")
     far_plane = inf if far is None else float(far)
     if isinstance(origins, np.ndarray) or isinstance(directions, np.ndarray) or isinstance(sigma, np.ndarray) or isinstance(color, np.ndarray):
+        if coarse_occupancy is not None:
+            raise NotImplementedError("coarse_occupancy is only implemented for Torch CUDA rendering")
         if not all(isinstance(value, np.ndarray) for value in (origins, directions, sigma, color)):
             raise TypeError("origins, directions, sigma, and color must all be NumPy arrays for CPU rendering")
         if strategy == "intervals":
@@ -233,6 +240,7 @@ def render_volume(
             float(early_stop_transmittance),
             bool(enable_empty_space_skipping),
             strategy,
+            coarse_occupancy,
         )
 
     raise TypeError("renderer inputs must be all NumPy arrays or all Torch tensors")
@@ -251,6 +259,7 @@ class VolumeRenderer(_TorchModuleBase):
         early_stop_transmittance: float = 1.0e-4,
         enable_empty_space_skipping: bool = True,
         render_strategy: str = "direct",
+        coarse_occupancy: Any | None = None,
     ) -> None:
         if _torch is None:
             raise ModuleNotFoundError("VolumeRenderer requires PyTorch; install torch to use the renderer module")
@@ -264,6 +273,7 @@ class VolumeRenderer(_TorchModuleBase):
         self.early_stop_transmittance = float(early_stop_transmittance)
         self.enable_empty_space_skipping = bool(enable_empty_space_skipping)
         self.render_strategy = _normalize_render_strategy(render_strategy)
+        self.coarse_occupancy = coarse_occupancy
 
     def forward(self, origins: Any, directions: Any, sigma: Any, color: Any) -> tuple[Any, Any, Any]:
         return render_volume(
@@ -278,6 +288,7 @@ class VolumeRenderer(_TorchModuleBase):
             early_stop_transmittance=self.early_stop_transmittance,
             enable_empty_space_skipping=self.enable_empty_space_skipping,
             render_strategy=self.render_strategy,
+            coarse_occupancy=self.coarse_occupancy,
         )
 
     def extra_repr(self) -> str:

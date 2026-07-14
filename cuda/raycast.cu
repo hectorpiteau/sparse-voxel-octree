@@ -68,6 +68,36 @@ struct WideDdaStateDevice {
   float delta_z = 0.0f;
 };
 
+struct MacroDdaCellDevice {
+  int x = 0;
+  int y = 0;
+  int z = 0;
+  float t_near = 0.0f;
+  float t_far = 0.0f;
+};
+
+struct MacroDdaStateDevice {
+  bool valid = false;
+  glm::vec3 min_bound{0.0f, 0.0f, 0.0f};
+  glm::vec3 cell_size{0.0f, 0.0f, 0.0f};
+  int resolution = 0;
+  float base_t = 0.0f;
+  float max_s = 0.0f;
+  float current_s = 0.0f;
+  int cell_x = 0;
+  int cell_y = 0;
+  int cell_z = 0;
+  int step_x = 0;
+  int step_y = 0;
+  int step_z = 0;
+  float next_x = 0.0f;
+  float next_y = 0.0f;
+  float next_z = 0.0f;
+  float delta_x = 0.0f;
+  float delta_y = 0.0f;
+  float delta_z = 0.0f;
+};
+
 __device__ bool finite_vec3_device(const glm::vec3& value) noexcept {
   return isfinite(value.x) && isfinite(value.y) && isfinite(value.z);
 }
@@ -176,6 +206,10 @@ __device__ int clamp_cell_device(int cell) noexcept {
   return max(0, min(3, cell));
 }
 
+__device__ int clamp_macro_cell_device(int cell, int resolution) noexcept {
+  return max(0, min(resolution - 1, cell));
+}
+
 __device__ int local_cell_for_position_device(
     float position,
     float min_bound,
@@ -194,6 +228,27 @@ __device__ int local_cell_for_position_device(
     return walk_direction < -kEpsilon ? boundary - 1 : boundary;
   }
   return clamp_cell_device(static_cast<int>(floorf(local)));
+}
+
+__device__ int macro_cell_for_position_device(
+    float position,
+    float min_bound,
+    float cell_size,
+    float walk_direction,
+    int resolution) noexcept {
+  const float local = (position - min_bound) / cell_size;
+  const float rounded = roundf(local);
+  if (fabsf(local - rounded) <= 8.0f * kEpsilon) {
+    const int boundary = static_cast<int>(rounded);
+    if (boundary <= 0) {
+      return 0;
+    }
+    if (boundary >= resolution) {
+      return resolution - 1;
+    }
+    return walk_direction < -kEpsilon ? boundary - 1 : boundary;
+  }
+  return clamp_macro_cell_device(static_cast<int>(floorf(local)), resolution);
 }
 
 __device__ void setup_wide_dda_axis_device(
@@ -275,6 +330,111 @@ __device__ WideDdaStateDevice make_wide_dda_state_device(
       state.next_z,
       state.delta_z);
   return state;
+}
+
+__device__ MacroDdaStateDevice make_macro_dda_state_device(
+    const CoarseOccupancyDeviceView& occupancy,
+    const glm::vec3& origin,
+    const glm::vec3& direction,
+    float t_near,
+    float t_far) noexcept {
+  MacroDdaStateDevice state;
+  const int resolution = occupancy.resolution;
+  if (occupancy.words == nullptr || (resolution != 16 && resolution != 32 && resolution != 64)) {
+    return state;
+  }
+  const float clipped_near = fmaxf(t_near, 0.0f);
+  if (t_far < clipped_near) {
+    return state;
+  }
+
+  state.valid = true;
+  state.resolution = resolution;
+  state.min_bound = occupancy.min_bound;
+  state.base_t = clipped_near;
+  state.max_s = t_far - clipped_near;
+  state.cell_size = (occupancy.max_bound - occupancy.min_bound) / static_cast<float>(resolution);
+  const glm::vec3 walk_origin = origin + direction * state.base_t;
+
+  state.cell_x = macro_cell_for_position_device(walk_origin.x, state.min_bound.x, state.cell_size.x, direction.x, resolution);
+  state.cell_y = macro_cell_for_position_device(walk_origin.y, state.min_bound.y, state.cell_size.y, direction.y, resolution);
+  state.cell_z = macro_cell_for_position_device(walk_origin.z, state.min_bound.z, state.cell_size.z, direction.z, resolution);
+
+  setup_wide_dda_axis_device(
+      walk_origin.x,
+      direction.x,
+      state.min_bound.x,
+      state.cell_size.x,
+      state.cell_x,
+      state.step_x,
+      state.next_x,
+      state.delta_x);
+  setup_wide_dda_axis_device(
+      walk_origin.y,
+      direction.y,
+      state.min_bound.y,
+      state.cell_size.y,
+      state.cell_y,
+      state.step_y,
+      state.next_y,
+      state.delta_y);
+  setup_wide_dda_axis_device(
+      walk_origin.z,
+      direction.z,
+      state.min_bound.z,
+      state.cell_size.z,
+      state.cell_z,
+      state.step_z,
+      state.next_z,
+      state.delta_z);
+  return state;
+}
+
+__device__ bool next_macro_dda_cell_device(MacroDdaStateDevice& state, MacroDdaCellDevice& cell) noexcept {
+  if (!state.valid || state.current_s > state.max_s + kEpsilon || state.cell_x < 0 ||
+      state.cell_x >= state.resolution || state.cell_y < 0 || state.cell_y >= state.resolution ||
+      state.cell_z < 0 || state.cell_z >= state.resolution) {
+    return false;
+  }
+
+  const float next_s = fminf(fminf(state.next_x, state.next_y), fminf(state.next_z, state.max_s));
+  cell.x = state.cell_x;
+  cell.y = state.cell_y;
+  cell.z = state.cell_z;
+  cell.t_near = state.base_t + state.current_s;
+  cell.t_far = state.base_t + next_s;
+
+  if (next_s >= state.max_s - kEpsilon) {
+    state.valid = false;
+    return true;
+  }
+
+  state.current_s = next_s;
+  if (state.next_x <= next_s + kEpsilon) {
+    state.cell_x += state.step_x;
+    state.next_x += state.delta_x;
+  }
+  if (state.next_y <= next_s + kEpsilon) {
+    state.cell_y += state.step_y;
+    state.next_y += state.delta_y;
+  }
+  if (state.next_z <= next_s + kEpsilon) {
+    state.cell_z += state.step_z;
+    state.next_z += state.delta_z;
+  }
+  return true;
+}
+
+__device__ bool macro_occupied_device(const CoarseOccupancyDeviceView& occupancy, int x, int y, int z) noexcept {
+  const int resolution = occupancy.resolution;
+  const std::uint32_t linear = static_cast<std::uint32_t>(x) +
+      static_cast<std::uint32_t>(resolution) *
+          (static_cast<std::uint32_t>(y) + static_cast<std::uint32_t>(resolution) * static_cast<std::uint32_t>(z));
+  return (occupancy.words[linear >> 5u] & (1u << (linear & 31u))) != 0u;
+}
+
+__device__ bool coarse_occupancy_enabled_device(const CoarseOccupancyDeviceView& occupancy) noexcept {
+  return occupancy.words != nullptr && (occupancy.resolution == 16 || occupancy.resolution == 32 || occupancy.resolution == 64);
 }
 
 __device__ bool next_wide_dda_cell_device(WideDdaStateDevice& state, WideDdaCellDevice& cell) noexcept {
@@ -383,6 +543,8 @@ __device__ void consider_leaf_device(
     std::int32_t leaf_id,
     std::int32_t depth,
     bool return_payload_indices,
+    float clip_near,
+    float clip_far,
     TraversalStats* stats,
     HitCandidateDevice& best) noexcept {
   if (leaf_id < 0 || static_cast<std::size_t>(leaf_id) >= num_leaves) {
@@ -394,6 +556,11 @@ __device__ void consider_leaf_device(
   if (!intersect_aabb_device(bounds, origin, direction, t_near, t_far)) {
     return;
   }
+  const float t0 = fmaxf(fmaxf(t_near, clip_near), 0.0f);
+  const float t1 = fminf(t_far, clip_far);
+  if (t1 < t0) {
+    return;
+  }
   add_stat_device(stats != nullptr ? &stats->leaf_segments : nullptr);
 
   HitCandidateDevice candidate;
@@ -401,7 +568,7 @@ __device__ void consider_leaf_device(
   candidate.leaf_id = return_payload_indices
       ? static_cast<std::int32_t>(leaf_payload_indices[static_cast<std::size_t>(leaf_id)])
       : leaf_id;
-  candidate.t = fmaxf(t_near, 0.0f);
+  candidate.t = t0;
   candidate.position = origin + direction * candidate.t;
   candidate.depth = depth;
 
@@ -420,6 +587,8 @@ __device__ HitCandidateDevice raycast_single_device(
     const glm::vec3& origin,
     const glm::vec3& direction,
     bool return_payload_indices,
+    float clip_near,
+    float clip_far,
     TraversalStats* stats) noexcept {
   HitCandidateDevice best;
   if (num_nodes == 0 || !finite_vec3_device(origin)) {
@@ -437,6 +606,9 @@ __device__ HitCandidateDevice raycast_single_device(
   if (!intersect_aabb_device(root_bounds, origin, normalized_direction, root_t_near, root_t_far)) {
     return best;
   }
+  if (fminf(root_t_far, clip_far) < fmaxf(fmaxf(root_t_near, clip_near), 0.0f)) {
+    return best;
+  }
 
   if (max_depth == 0) {
     consider_leaf_device(
@@ -448,6 +620,8 @@ __device__ HitCandidateDevice raycast_single_device(
         0,
         0,
         return_payload_indices,
+        clip_near,
+        clip_far,
         stats,
         best);
     return best;
@@ -485,6 +659,9 @@ __device__ HitCandidateDevice raycast_single_device(
       if (!intersect_aabb_device(child, origin, normalized_direction, t_near, t_far)) {
         continue;
       }
+      if (fminf(t_far, clip_far) < fmaxf(fmaxf(t_near, clip_near), 0.0f)) {
+        continue;
+      }
       if (best.hit && fmaxf(t_near, 0.0f) > best.t + kEpsilon) {
         continue;
       }
@@ -503,6 +680,8 @@ __device__ HitCandidateDevice raycast_single_device(
             leaf_id,
             depth,
             return_payload_indices,
+            clip_near,
+            clip_far,
             stats,
             best);
         continue;
@@ -532,6 +711,8 @@ __device__ HitCandidateDevice raycast_single_wide_device(
     const glm::vec3& origin,
     const glm::vec3& direction,
     bool return_payload_indices,
+    float clip_near,
+    float clip_far,
     TraversalStats* stats) noexcept {
   HitCandidateDevice best;
   if (num_nodes == 0 || !finite_vec3_device(origin)) {
@@ -549,6 +730,9 @@ __device__ HitCandidateDevice raycast_single_wide_device(
   if (!intersect_aabb_device(root_bounds, origin, normalized_direction, root_t_near, root_t_far)) {
     return best;
   }
+  if (fminf(root_t_far, clip_far) < fmaxf(fmaxf(root_t_near, clip_near), 0.0f)) {
+    return best;
+  }
 
   if (max_depth == 0) {
     consider_leaf_device(
@@ -560,6 +744,8 @@ __device__ HitCandidateDevice raycast_single_wide_device(
         0,
         0,
         return_payload_indices,
+        clip_near,
+        clip_far,
         stats,
         best);
     return best;
@@ -604,6 +790,9 @@ __device__ HitCandidateDevice raycast_single_wide_device(
       if (best.hit && fmaxf(cell.t_near, 0.0f) > best.t + kEpsilon) {
         continue;
       }
+      if (fminf(cell.t_far, clip_far) < fmaxf(fmaxf(cell.t_near, clip_near), 0.0f)) {
+        continue;
+      }
 
       if ((leaf_mask & child_bit) != 0u) {
         const std::int32_t leaf_id = static_cast<std::int32_t>(
@@ -619,6 +808,8 @@ __device__ HitCandidateDevice raycast_single_wide_device(
             leaf_id,
             depth,
             return_payload_indices,
+            clip_near,
+            clip_far,
             stats,
             best);
         continue;
@@ -634,6 +825,122 @@ __device__ HitCandidateDevice raycast_single_wide_device(
     }
   }
 
+  return best;
+}
+
+__device__ HitCandidateDevice raycast_single_coarse_octree_device(
+    const NodeDescriptor* nodes,
+    std::size_t num_nodes,
+    const std::uint32_t* leaf_payload_indices,
+    std::size_t num_leaves,
+    int max_depth,
+    const CoarseOccupancyDeviceView& occupancy,
+    const AabbDevice& root_bounds,
+    const glm::vec3& origin,
+    const glm::vec3& direction,
+    bool return_payload_indices,
+    TraversalStats* stats) noexcept {
+  HitCandidateDevice best;
+  if (!coarse_occupancy_enabled_device(occupancy) || !finite_vec3_device(origin)) {
+    return best;
+  }
+  bool valid_direction = false;
+  const glm::vec3 normalized_direction = normalize_or_zero_device(direction, valid_direction);
+  if (!valid_direction) {
+    return best;
+  }
+
+  float root_t_near = 0.0f;
+  float root_t_far = 0.0f;
+  if (!intersect_aabb_device(root_bounds, origin, normalized_direction, root_t_near, root_t_far)) {
+    return best;
+  }
+
+  MacroDdaStateDevice dda = make_macro_dda_state_device(occupancy, origin, normalized_direction, root_t_near, root_t_far);
+  MacroDdaCellDevice cell;
+  while (next_macro_dda_cell_device(dda, cell)) {
+    add_stat_device(stats != nullptr ? &stats->macro_cells_tested : nullptr);
+    if (!macro_occupied_device(occupancy, cell.x, cell.y, cell.z)) {
+      add_stat_device(stats != nullptr ? &stats->macro_cells_skipped : nullptr);
+      continue;
+    }
+    add_stat_device(stats != nullptr ? &stats->macro_cells_occupied : nullptr);
+    add_stat_device(stats != nullptr ? &stats->macro_tree_entries : nullptr);
+    best = raycast_single_device(
+        nodes,
+        num_nodes,
+        leaf_payload_indices,
+        num_leaves,
+        max_depth,
+        root_bounds,
+        origin,
+        direction,
+        return_payload_indices,
+        cell.t_near,
+        cell.t_far,
+        stats);
+    if (best.hit) {
+      return best;
+    }
+  }
+  return best;
+}
+
+__device__ HitCandidateDevice raycast_single_coarse_wide_device(
+    const WideNodeDescriptor* nodes,
+    std::size_t num_nodes,
+    const std::uint32_t* leaf_payload_indices,
+    std::size_t num_leaves,
+    int max_depth,
+    const CoarseOccupancyDeviceView& occupancy,
+    const AabbDevice& root_bounds,
+    const glm::vec3& origin,
+    const glm::vec3& direction,
+    bool return_payload_indices,
+    TraversalStats* stats) noexcept {
+  HitCandidateDevice best;
+  if (!coarse_occupancy_enabled_device(occupancy) || !finite_vec3_device(origin)) {
+    return best;
+  }
+  bool valid_direction = false;
+  const glm::vec3 normalized_direction = normalize_or_zero_device(direction, valid_direction);
+  if (!valid_direction) {
+    return best;
+  }
+
+  float root_t_near = 0.0f;
+  float root_t_far = 0.0f;
+  if (!intersect_aabb_device(root_bounds, origin, normalized_direction, root_t_near, root_t_far)) {
+    return best;
+  }
+
+  MacroDdaStateDevice dda = make_macro_dda_state_device(occupancy, origin, normalized_direction, root_t_near, root_t_far);
+  MacroDdaCellDevice cell;
+  while (next_macro_dda_cell_device(dda, cell)) {
+    add_stat_device(stats != nullptr ? &stats->macro_cells_tested : nullptr);
+    if (!macro_occupied_device(occupancy, cell.x, cell.y, cell.z)) {
+      add_stat_device(stats != nullptr ? &stats->macro_cells_skipped : nullptr);
+      continue;
+    }
+    add_stat_device(stats != nullptr ? &stats->macro_cells_occupied : nullptr);
+    add_stat_device(stats != nullptr ? &stats->macro_tree_entries : nullptr);
+    best = raycast_single_wide_device(
+        nodes,
+        num_nodes,
+        leaf_payload_indices,
+        num_leaves,
+        max_depth,
+        root_bounds,
+        origin,
+        direction,
+        return_payload_indices,
+        cell.t_near,
+        cell.t_far,
+        stats);
+    if (best.hit) {
+      return best;
+    }
+  }
   return best;
 }
 
@@ -654,7 +961,8 @@ __global__ void raycast_kernel(
     std::int32_t* depths,
     std::size_t count,
     bool return_payload_indices,
-    TraversalStats* stats) {
+    TraversalStats* stats,
+    CoarseOccupancyDeviceView coarse_occupancy) {
   const std::size_t index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
       static_cast<std::size_t>(threadIdx.x);
   if (index >= count) {
@@ -662,17 +970,34 @@ __global__ void raycast_kernel(
   }
 
   const AabbDevice root_bounds{min_bound, max_bound};
-  const HitCandidateDevice hit = raycast_single_device(
-      nodes,
-      num_nodes,
-      leaf_payload_indices,
-      num_leaves,
-      max_depth,
-      root_bounds,
-      origins[index],
-      directions[index],
-      return_payload_indices,
-      stats);
+  const glm::vec3 origin = origins[index];
+  const glm::vec3 direction = directions[index];
+  const HitCandidateDevice hit = coarse_occupancy_enabled_device(coarse_occupancy)
+      ? raycast_single_coarse_octree_device(
+            nodes,
+            num_nodes,
+            leaf_payload_indices,
+            num_leaves,
+            max_depth,
+            coarse_occupancy,
+            root_bounds,
+            origin,
+            direction,
+            return_payload_indices,
+            stats)
+      : raycast_single_device(
+            nodes,
+            num_nodes,
+            leaf_payload_indices,
+            num_leaves,
+            max_depth,
+            root_bounds,
+            origin,
+            direction,
+            return_payload_indices,
+            0.0f,
+            CUDART_INF_F,
+            stats);
 
   if (hit.hit) {
     write_hit_device(hit, hit_mask, leaf_ids, t, positions, depths, index);
@@ -698,24 +1023,43 @@ __global__ void raycast_wide_kernel(
     std::int32_t* depths,
     std::size_t count,
     bool return_payload_indices,
-    TraversalStats* stats) {
+    TraversalStats* stats,
+    CoarseOccupancyDeviceView coarse_occupancy) {
   const std::size_t index = static_cast<std::size_t>(blockIdx.x) * static_cast<std::size_t>(blockDim.x) +
       static_cast<std::size_t>(threadIdx.x);
   if (index >= count) {
     return;
   }
 
-  const HitCandidateDevice hit = raycast_single_wide_device(
-      nodes,
-      num_nodes,
-      leaf_payload_indices,
-      num_leaves,
-      max_depth,
-      AabbDevice{min_bound, max_bound},
-      origins[index],
-      directions[index],
-      return_payload_indices,
-      stats);
+  const AabbDevice root_bounds{min_bound, max_bound};
+  const glm::vec3 origin = origins[index];
+  const glm::vec3 direction = directions[index];
+  const HitCandidateDevice hit = coarse_occupancy_enabled_device(coarse_occupancy)
+      ? raycast_single_coarse_wide_device(
+            nodes,
+            num_nodes,
+            leaf_payload_indices,
+            num_leaves,
+            max_depth,
+            coarse_occupancy,
+            root_bounds,
+            origin,
+            direction,
+            return_payload_indices,
+            stats)
+      : raycast_single_wide_device(
+            nodes,
+            num_nodes,
+            leaf_payload_indices,
+            num_leaves,
+            max_depth,
+            root_bounds,
+            origin,
+            direction,
+            return_payload_indices,
+            0.0f,
+            CUDART_INF_F,
+            stats);
 
   if (hit.hit) {
     write_hit_device(hit, hit_mask, leaf_ids, t, positions, depths, index);
@@ -776,6 +1120,8 @@ void raycast_cuda(
   const int grid_size = static_cast<int>((count + static_cast<std::size_t>(kBlockSize) - 1u) /
       static_cast<std::size_t>(kBlockSize));
   cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(stream);
+  const CoarseOccupancyDeviceView coarse_occupancy =
+      options.coarse_occupancy != nullptr ? *options.coarse_occupancy : CoarseOccupancyDeviceView{};
 
   raycast_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
       nodes,
@@ -794,7 +1140,8 @@ void raycast_cuda(
       depths,
       count,
       options.return_payload_indices,
-      options.stats);
+      options.stats,
+      coarse_occupancy);
 
   check_cuda_launch(cudaGetLastError(), "raycast_kernel launch");
 }
@@ -837,6 +1184,8 @@ void raycast_wide_cuda(
   const int grid_size = static_cast<int>((count + static_cast<std::size_t>(kBlockSize) - 1u) /
       static_cast<std::size_t>(kBlockSize));
   cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(stream);
+  const CoarseOccupancyDeviceView coarse_occupancy =
+      options.coarse_occupancy != nullptr ? *options.coarse_occupancy : CoarseOccupancyDeviceView{};
 
   raycast_wide_kernel<<<grid_size, kBlockSize, 0, cuda_stream>>>(
       nodes,
@@ -855,7 +1204,8 @@ void raycast_wide_cuda(
       depths,
       count,
       options.return_payload_indices,
-      options.stats);
+      options.stats,
+      coarse_occupancy);
 
   check_cuda_launch(cudaGetLastError(), "raycast_wide_kernel launch");
 }

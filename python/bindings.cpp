@@ -16,6 +16,7 @@
 #endif
 
 #include <svo/Camera.hpp>
+#include <svo/CoarseOccupancy.hpp>
 #include <svo/DeviceBuffer.hpp>
 #include <svo/Error.hpp>
 #include <svo/Interpolation.hpp>
@@ -711,6 +712,42 @@ bool py_equal(py::handle lhs, py::handle rhs) {
   return result == 1;
 }
 
+class CudaCoarseOccupancyOwner {
+ public:
+  CudaCoarseOccupancyOwner(const svo::Octree& host_octree, int resolution, int device_index)
+      : device_index_(device_index) {
+    CudaDeviceGuard guard(device_index_);
+    host_grid_ = svo::CoarseOccupancyGrid::from_octree(host_octree, resolution);
+    device_grid_.upload(host_grid_);
+    view_ = device_grid_.view();
+  }
+
+  ~CudaCoarseOccupancyOwner() {
+    release();
+  }
+
+  CudaCoarseOccupancyOwner(const CudaCoarseOccupancyOwner&) = delete;
+  CudaCoarseOccupancyOwner& operator=(const CudaCoarseOccupancyOwner&) = delete;
+  CudaCoarseOccupancyOwner(CudaCoarseOccupancyOwner&&) noexcept = default;
+  CudaCoarseOccupancyOwner& operator=(CudaCoarseOccupancyOwner&&) noexcept = default;
+
+  void release() noexcept {
+    device_grid_ = svo::DeviceCoarseOccupancyGrid{};
+    view_ = {};
+  }
+
+  const svo::CoarseOccupancyDeviceView& view() const noexcept { return view_; }
+  int resolution() const noexcept { return host_grid_.resolution(); }
+  std::size_t size_bytes() const noexcept { return host_grid_.size_bytes(); }
+  int device_index() const noexcept { return device_index_; }
+
+ private:
+  int device_index_ = 0;
+  svo::CoarseOccupancyGrid host_grid_;
+  svo::DeviceCoarseOccupancyGrid device_grid_;
+  svo::CoarseOccupancyDeviceView view_;
+};
+
 bool is_torch_tensor(py::handle torch, py::handle value) {
   return py::cast<bool>(torch.attr("is_tensor")(value));
 }
@@ -951,6 +988,10 @@ class CudaOctreeOwner {
   std::int64_t num_leaves() const noexcept { return host_octree_.num_leaves(); }
   int device_index() const noexcept { return device_index_; }
   const svo::RootBounds& root_bounds() const noexcept { return host_octree_.root_bounds(); }
+
+  CudaCoarseOccupancyOwner coarse_occupancy(int resolution) const {
+    return CudaCoarseOccupancyOwner(host_octree_, resolution, device_index_);
+  }
 
   py::object query(py::object points, bool return_payload_indices) const {
     if (object_type_is_from_torch(points)) {
@@ -1441,7 +1482,7 @@ class CudaOctreeOwner {
       return py::make_tuple(grad_sigma, grad_color);
     }
 
-    const svo::RenderOptions options = render_options_from_python(
+    svo::RenderOptions options = render_options_from_python(
         near_plane,
         far_plane,
         background_color,
@@ -1517,7 +1558,8 @@ class CudaOctreeOwner {
       py::object background_color,
       double early_stop_transmittance,
       bool store_aux,
-      bool enable_empty_space_skipping) const {
+      bool enable_empty_space_skipping,
+      py::object coarse_occupancy_obj = py::none()) const {
     py::object torch = import_torch();
     check_torch_float32_tensor(torch, origins, "origins", device_index_);
     check_torch_float32_tensor(torch, directions, "directions", device_index_);
@@ -1559,7 +1601,7 @@ class CudaOctreeOwner {
       return py::make_tuple(rgb, depth, opacity);
     }
 
-    const svo::RenderOptions options = render_options_from_python(
+    svo::RenderOptions options = render_options_from_python(
         near_plane,
         far_plane,
         background_color,
@@ -1571,6 +1613,17 @@ class CudaOctreeOwner {
     const auto* direction_data = reinterpret_cast<const glm::vec3*>(torch_data_ptr(directions));
     const auto* sigma_data = reinterpret_cast<const float*>(torch_data_ptr(sigma));
     const auto* color_data = reinterpret_cast<const float*>(torch_data_ptr(color));
+    const CudaCoarseOccupancyOwner* coarse_occupancy = nullptr;
+    if (!coarse_occupancy_obj.is_none()) {
+      coarse_occupancy = py::cast<const CudaCoarseOccupancyOwner*>(coarse_occupancy_obj);
+      if (coarse_occupancy == nullptr) {
+        throw py::type_error("coarse_occupancy must be created by CudaOctree._coarse_occupancy()");
+      }
+      if (coarse_occupancy->device_index() != device_index_) {
+        throw py::value_error("coarse_occupancy belongs to a different CUDA device");
+      }
+      options.coarse_occupancy = &coarse_occupancy->view();
+    }
     auto* rgb_data = reinterpret_cast<glm::vec3*>(torch_data_ptr(rgb));
     auto* depth_data = reinterpret_cast<float*>(torch_data_ptr(depth));
     auto* opacity_data = reinterpret_cast<float*>(torch_data_ptr(opacity));
@@ -2274,7 +2327,8 @@ Returns:
           py::arg("background_color") = py::make_tuple(0.0, 0.0, 0.0),
           py::arg("early_stop_transmittance") = 1.0e-4,
           py::arg("store_aux") = false,
-          py::arg("enable_empty_space_skipping") = true)
+          py::arg("enable_empty_space_skipping") = true,
+          py::arg("coarse_occupancy") = py::none())
       .def(
           "_render_volume_intervals_torch",
           &CudaOctreeOwner::render_volume_intervals_torch,
@@ -2345,8 +2399,21 @@ Returns:
       .def_property_readonly(
           "leaf_payload_indices",
           [](const CudaOctreeOwner& octree) { return payload_indices_to_numpy(octree.host_octree().leaf_payload_indices()); })
+      .def(
+          "_coarse_occupancy",
+          &CudaOctreeOwner::coarse_occupancy,
+          py::arg("resolution"),
+          R"pbdoc(
+Build a CUDA-resident coarse occupancy grid for debug/benchmark rendering.
+)pbdoc")
       .def("_release", &CudaOctreeOwner::release)
       .def("__repr__", &cuda_octree_repr);
+
+  py::class_<CudaCoarseOccupancyOwner>(module, "_CudaCoarseOccupancy", "CUDA coarse occupancy debug accelerator.")
+      .def_property_readonly("resolution", &CudaCoarseOccupancyOwner::resolution)
+      .def_property_readonly("size_bytes", &CudaCoarseOccupancyOwner::size_bytes)
+      .def_property_readonly("device_index", &CudaCoarseOccupancyOwner::device_index)
+      .def("_release", &CudaCoarseOccupancyOwner::release);
 #endif
 
   module.def(

@@ -12,6 +12,7 @@ namespace svo {
 struct RaycastOptions {
   bool return_payload_indices = false;
   TraversalStats* stats = nullptr;
+  const CoarseOccupancyDeviceView* coarse_occupancy = nullptr;
 };
 
 struct RaycastBatch {

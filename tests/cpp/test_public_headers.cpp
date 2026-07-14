@@ -1,5 +1,6 @@
 #include <svo/Builder.hpp>
 #include <svo/Camera.hpp>
+#include <svo/CoarseOccupancy.hpp>
 #include <svo/DeviceBuffer.hpp>
 #include <svo/Error.hpp>
 #include <svo/Interpolation.hpp>
@@ -26,6 +27,7 @@ int main() {
   svo::QueryOptions query_options;
   svo::RaycastOptions raycast_options;
   svo::RenderOptions render_options;
+  svo::CoarseOccupancyGrid coarse_grid(16, svo::default_root_bounds());
   svo::CameraIntrinsics intrinsics{3, 3, 3.0f, 3.0f, 1.5f, 1.5f};
   svo::Camera camera = svo::Camera::from_intrinsics(
       {0.0f, 0.0f, 0.0f},
@@ -52,6 +54,7 @@ int main() {
   (void)query_options;
   (void)raycast_options;
   (void)render_options;
+  (void)coarse_grid;
   (void)intrinsics;
   (void)camera;
   (void)rays;

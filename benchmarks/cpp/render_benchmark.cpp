@@ -92,9 +92,18 @@ RenderRun run_octree8(
   svo::DeviceBuffer<float> device_grad_sigma(sigma.size(), svo::Device::CUDA);
   svo::DeviceBuffer<float> device_grad_color(color.size(), svo::Device::CUDA);
   svo::DeviceBuffer<svo::TraversalStats> device_stats(1, svo::Device::CUDA);
+  svo::DeviceCoarseOccupancyGrid device_coarse;
+  svo::CoarseOccupancyDeviceView coarse_view;
   const std::vector<glm::vec3> grad_rgb(origins.size(), {1.0f, 1.0f, 1.0f});
   const std::vector<float> grad_opacity(origins.size(), 1.0f);
   svo::TraversalStats zero_stats{};
+  const bool use_coarse = config.empty_space_accelerator == "coarse";
+  if (use_coarse && config.render_strategy == "intervals") {
+    throw std::runtime_error("--empty-space-accelerator coarse is not wired for --render-strategy intervals");
+  }
+  const svo::CoarseOccupancyGrid coarse_grid =
+      use_coarse ? svo::CoarseOccupancyGrid::from_octree(tree, config.coarse_resolution) : svo::CoarseOccupancyGrid{};
+  run.metrics.coarse_occupancy_bytes = use_coarse ? static_cast<std::uint64_t>(coarse_grid.size_bytes()) : 0u;
 
   run.metrics.h2d_ms = svo_bench::time_cuda_ms(stream, [&]() {
     device_nodes.copy_from_host(tree.nodes().data(), tree.nodes().size(), stream);
@@ -106,12 +115,17 @@ RenderRun run_octree8(
     device_grad_rgb.copy_from_host(grad_rgb.data(), grad_rgb.size(), stream);
     device_grad_opacity.copy_from_host(grad_opacity.data(), grad_opacity.size(), stream);
     device_stats.copy_from_host(&zero_stats, 1, stream);
+    if (use_coarse) {
+      device_coarse.upload(coarse_grid, stream);
+      coarse_view = device_coarse.view();
+    }
     svo_bench::check(cudaMemsetAsync(device_grad_sigma.data(), 0, sigma.size() * sizeof(float), stream), "cudaMemsetAsync grad_sigma");
     svo_bench::check(cudaMemsetAsync(device_grad_color.data(), 0, color.size() * sizeof(float), stream), "cudaMemsetAsync grad_color");
   });
 
   svo::RenderOptions options;
   options.stats = config.profile ? device_stats.data() : nullptr;
+  options.coarse_occupancy = use_coarse ? &coarse_view : nullptr;
   svo::RenderIntervalBuffer intervals;
   if (config.render_strategy == "intervals") {
     auto build_intervals = [&]() {
@@ -280,9 +294,18 @@ RenderRun run_wide4(
   svo::DeviceBuffer<float> device_grad_sigma(sigma.size(), svo::Device::CUDA);
   svo::DeviceBuffer<float> device_grad_color(color.size(), svo::Device::CUDA);
   svo::DeviceBuffer<svo::TraversalStats> device_stats(1, svo::Device::CUDA);
+  svo::DeviceCoarseOccupancyGrid device_coarse;
+  svo::CoarseOccupancyDeviceView coarse_view;
   const std::vector<glm::vec3> grad_rgb(origins.size(), {1.0f, 1.0f, 1.0f});
   const std::vector<float> grad_opacity(origins.size(), 1.0f);
   svo::TraversalStats zero_stats{};
+  const bool use_coarse = config.empty_space_accelerator == "coarse";
+  if (use_coarse && config.render_strategy == "intervals") {
+    throw std::runtime_error("--empty-space-accelerator coarse is not wired for --render-strategy intervals");
+  }
+  const svo::CoarseOccupancyGrid coarse_grid =
+      use_coarse ? svo::CoarseOccupancyGrid::from_octree(tree, config.coarse_resolution) : svo::CoarseOccupancyGrid{};
+  run.metrics.coarse_occupancy_bytes = use_coarse ? static_cast<std::uint64_t>(coarse_grid.size_bytes()) : 0u;
 
   run.metrics.h2d_ms = svo_bench::time_cuda_ms(stream, [&]() {
     device_nodes.copy_from_host(tree.wide_nodes().data(), tree.wide_nodes().size(), stream);
@@ -294,12 +317,17 @@ RenderRun run_wide4(
     device_grad_rgb.copy_from_host(grad_rgb.data(), grad_rgb.size(), stream);
     device_grad_opacity.copy_from_host(grad_opacity.data(), grad_opacity.size(), stream);
     device_stats.copy_from_host(&zero_stats, 1, stream);
+    if (use_coarse) {
+      device_coarse.upload(coarse_grid, stream);
+      coarse_view = device_coarse.view();
+    }
     svo_bench::check(cudaMemsetAsync(device_grad_sigma.data(), 0, sigma.size() * sizeof(float), stream), "cudaMemsetAsync grad_sigma");
     svo_bench::check(cudaMemsetAsync(device_grad_color.data(), 0, color.size() * sizeof(float), stream), "cudaMemsetAsync grad_color");
   });
 
   svo::RenderOptions options;
   options.stats = config.profile ? device_stats.data() : nullptr;
+  options.coarse_occupancy = use_coarse ? &coarse_view : nullptr;
   svo::RenderIntervalBuffer intervals;
   if (config.render_strategy == "intervals") {
     auto build_intervals = [&]() {
@@ -457,6 +485,7 @@ void print_result(
   std::cout << "  nodes: " << svo_bench::total_nodes(tree) << '\n';
   std::cout << "  leaves: " << tree.num_leaves() << '\n';
   std::cout << "  pixels: " << config.count << '\n';
+  std::cout << "  coarse_occupancy_bytes: " << run.metrics.coarse_occupancy_bytes << '\n';
   std::cout << "  cpu_reference_wall_ms: " << run.metrics.cpu_ms << '\n';
   std::cout << "  h2d_ms: " << run.metrics.h2d_ms << '\n';
   std::cout << "  interval_build_ms: " << run.metrics.interval_build_ms << '\n';

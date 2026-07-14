@@ -41,8 +41,14 @@ RaycastRun run_octree8(
   svo::DeviceBuffer<glm::vec3> device_positions(origins.size(), svo::Device::CUDA);
   svo::DeviceBuffer<std::int32_t> device_depths(origins.size(), svo::Device::CUDA);
   svo::DeviceBuffer<svo::TraversalStats> device_stats(1, svo::Device::CUDA);
+  svo::DeviceCoarseOccupancyGrid device_coarse;
+  svo::CoarseOccupancyDeviceView coarse_view;
   svo::TraversalStats zero_stats{};
   std::vector<std::uint8_t> hit_mask(origins.size());
+  const bool use_coarse = config.empty_space_accelerator == "coarse";
+  const svo::CoarseOccupancyGrid coarse_grid =
+      use_coarse ? svo::CoarseOccupancyGrid::from_octree(tree, config.coarse_resolution) : svo::CoarseOccupancyGrid{};
+  run.metrics.coarse_occupancy_bytes = use_coarse ? static_cast<std::uint64_t>(coarse_grid.size_bytes()) : 0u;
 
   run.metrics.h2d_ms = svo_bench::time_cuda_ms(stream, [&]() {
     device_nodes.copy_from_host(tree.nodes().data(), tree.nodes().size(), stream);
@@ -50,10 +56,15 @@ RaycastRun run_octree8(
     device_origins.copy_from_host(origins.data(), origins.size(), stream);
     device_directions.copy_from_host(directions.data(), directions.size(), stream);
     device_stats.copy_from_host(&zero_stats, 1, stream);
+    if (use_coarse) {
+      device_coarse.upload(coarse_grid, stream);
+      coarse_view = device_coarse.view();
+    }
   });
 
   svo::RaycastOptions options;
   options.stats = config.profile ? device_stats.data() : nullptr;
+  options.coarse_occupancy = use_coarse ? &coarse_view : nullptr;
   auto launch = [&]() {
     svo::raycast_cuda(
         device_nodes.data(),
@@ -122,8 +133,14 @@ RaycastRun run_wide4(
   svo::DeviceBuffer<glm::vec3> device_positions(origins.size(), svo::Device::CUDA);
   svo::DeviceBuffer<std::int32_t> device_depths(origins.size(), svo::Device::CUDA);
   svo::DeviceBuffer<svo::TraversalStats> device_stats(1, svo::Device::CUDA);
+  svo::DeviceCoarseOccupancyGrid device_coarse;
+  svo::CoarseOccupancyDeviceView coarse_view;
   svo::TraversalStats zero_stats{};
   std::vector<std::uint8_t> hit_mask(origins.size());
+  const bool use_coarse = config.empty_space_accelerator == "coarse";
+  const svo::CoarseOccupancyGrid coarse_grid =
+      use_coarse ? svo::CoarseOccupancyGrid::from_octree(tree, config.coarse_resolution) : svo::CoarseOccupancyGrid{};
+  run.metrics.coarse_occupancy_bytes = use_coarse ? static_cast<std::uint64_t>(coarse_grid.size_bytes()) : 0u;
 
   run.metrics.h2d_ms = svo_bench::time_cuda_ms(stream, [&]() {
     device_nodes.copy_from_host(tree.wide_nodes().data(), tree.wide_nodes().size(), stream);
@@ -131,10 +148,15 @@ RaycastRun run_wide4(
     device_origins.copy_from_host(origins.data(), origins.size(), stream);
     device_directions.copy_from_host(directions.data(), directions.size(), stream);
     device_stats.copy_from_host(&zero_stats, 1, stream);
+    if (use_coarse) {
+      device_coarse.upload(coarse_grid, stream);
+      coarse_view = device_coarse.view();
+    }
   });
 
   svo::RaycastOptions options;
   options.stats = config.profile ? device_stats.data() : nullptr;
+  options.coarse_occupancy = use_coarse ? &coarse_view : nullptr;
   auto launch = [&]() {
     svo::raycast_wide_cuda(
         device_nodes.data(),
@@ -190,6 +212,7 @@ void print_result(
   std::cout << "  leaves: " << tree.num_leaves() << '\n';
   std::cout << "  rays: " << config.count << '\n';
   std::cout << "  hits: " << run.hits << '\n';
+  std::cout << "  coarse_occupancy_bytes: " << run.metrics.coarse_occupancy_bytes << '\n';
   std::cout << "  hit_rate: " << static_cast<double>(run.hits) / static_cast<double>(config.count) << '\n';
   std::cout << "  cpu_reference_wall_ms: " << run.metrics.cpu_ms << '\n';
   std::cout << "  h2d_ms: " << run.metrics.h2d_ms << '\n';

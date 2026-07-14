@@ -37,6 +37,7 @@ add_library(
   svo_core STATIC
   src/Builder.cpp
   src/Camera.cpp
+  src/CoarseOccupancy.cpp
   src/Interpolation.cpp
   src/Octree.cpp
   src/Query.cpp
@@ -156,6 +157,10 @@ if(BUILD_TESTING AND SVO_BUILD_TESTS)
   add_executable(svo_camera_test tests/cpp/test_camera.cpp)
   target_link_libraries(svo_camera_test PRIVATE svo_core)
   add_test(NAME svo_camera_test COMMAND svo_camera_test)
+
+  add_executable(svo_coarse_occupancy_test tests/cpp/test_coarse_occupancy.cpp)
+  target_link_libraries(svo_coarse_occupancy_test PRIVATE svo_core)
+  add_test(NAME svo_coarse_occupancy_test COMMAND svo_coarse_occupancy_test)
 
   add_executable(svo_device_buffer_test tests/cpp/test_device_buffer.cpp)
   target_link_libraries(svo_device_buffer_test PRIVATE svo_core)

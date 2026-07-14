@@ -1,5 +1,6 @@
 #pragma once
 
+#include <svo/CoarseOccupancy.hpp>
 #include <svo/DeviceBuffer.hpp>
 #include <svo/Octree.hpp>
 
@@ -36,6 +37,8 @@ struct BenchmarkConfig {
   int grid_size = 64;
   std::string branching = "both";
   std::string render_strategy = "direct";
+  std::string empty_space_accelerator = "none";
+  int coarse_resolution = 32;
   std::uint32_t seed = kDefaultSeed;
   double density = 0.035;
   int iterations = 20;
@@ -54,6 +57,7 @@ struct TimingMetrics {
   double interval_build_ms = 0.0;
   std::uint64_t interval_count = 0;
   std::uint64_t max_intervals_per_ray = 0;
+  std::uint64_t coarse_occupancy_bytes = 0;
 };
 
 inline void check(cudaError_t result, const char* operation) {
@@ -160,6 +164,10 @@ inline BenchmarkConfig parse_config(int argc, char** argv, std::size_t default_c
       config.branching = require_value(index, argc, argv);
     } else if (flag == "--render-strategy") {
       config.render_strategy = require_value(index, argc, argv);
+    } else if (flag == "--empty-space-accelerator") {
+      config.empty_space_accelerator = require_value(index, argc, argv);
+    } else if (flag == "--coarse-resolution") {
+      config.coarse_resolution = std::stoi(require_value(index, argc, argv));
     } else if (flag == "--seed") {
       config.seed = static_cast<std::uint32_t>(std::stoul(require_value(index, argc, argv)));
     } else if (flag == "--density") {
@@ -193,6 +201,13 @@ inline BenchmarkConfig parse_config(int argc, char** argv, std::size_t default_c
   }
   if (config.render_strategy != "direct" && config.render_strategy != "intervals") {
     throw std::runtime_error("--render-strategy must be direct, intervals, or auto");
+  }
+  if (config.empty_space_accelerator != "none" && config.empty_space_accelerator != "coarse") {
+    throw std::runtime_error("--empty-space-accelerator must be none or coarse");
+  }
+  if (config.empty_space_accelerator == "coarse" &&
+      !svo::is_valid_coarse_occupancy_resolution(config.coarse_resolution)) {
+    throw std::runtime_error("--coarse-resolution must be 16, 32, or 64");
   }
   if (config.density < 0.0 || config.density > 1.0) {
     throw std::runtime_error("--density must be in [0, 1]");
@@ -252,8 +267,27 @@ inline std::vector<glm::ivec3> make_scene(const BenchmarkConfig& config) {
     return coordinates;
   }
 
+  if (config.scene == "shell") {
+    const float inner_radius = 0.24f;
+    const float outer_radius = 0.30f;
+    for (int z = 0; z < grid_size; ++z) {
+      for (int y = 0; y < grid_size; ++y) {
+        for (int x = 0; x < grid_size; ++x) {
+          const float nx = (static_cast<float>(x) + 0.5f) / static_cast<float>(grid_size) - 0.5f;
+          const float ny = (static_cast<float>(y) + 0.5f) / static_cast<float>(grid_size) - 0.5f;
+          const float nz = (static_cast<float>(z) + 0.5f) / static_cast<float>(grid_size) - 0.5f;
+          const float r2 = nx * nx + ny * ny + nz * nz;
+          if (r2 >= inner_radius * inner_radius && r2 <= outer_radius * outer_radius) {
+            coordinates.push_back({x, y, z});
+          }
+        }
+      }
+    }
+    return coordinates;
+  }
+
   if (config.scene != "sparse_random") {
-    throw std::runtime_error("--scene must be empty, single_voxel, dense_cube, sphere, or sparse_random");
+    throw std::runtime_error("--scene must be empty, single_voxel, dense_cube, sphere, shell, or sparse_random");
   }
 
   std::mt19937_64 rng(mix_seed(config.seed, config.grid_size, config.density));
@@ -336,9 +370,23 @@ inline void make_payloads(const svo::Octree& octree, std::vector<float>& sigma, 
 
 inline std::string gpu_name() {
   int device = 0;
-  check(cudaGetDevice(&device), "cudaGetDevice");
+  cudaError_t result = cudaGetDevice(&device);
+  if (result != cudaSuccess) {
+    int count = 0;
+    result = cudaGetDeviceCount(&count);
+    if (result == cudaSuccess && count > 0) {
+      device = 0;
+      result = cudaSetDevice(device);
+    }
+  }
+  if (result != cudaSuccess) {
+    return std::string("unavailable: ") + cudaGetErrorString(result);
+  }
   cudaDeviceProp properties{};
-  check(cudaGetDeviceProperties(&properties, device), "cudaGetDeviceProperties");
+  result = cudaGetDeviceProperties(&properties, device);
+  if (result != cudaSuccess) {
+    return std::string("unavailable: ") + cudaGetErrorString(result);
+  }
   return properties.name;
 }
 
@@ -409,6 +457,10 @@ inline void write_stats_json(std::ostream& out, bool& first, const svo::Traversa
   write_json_field(out, first, "stats_stack_pushes", stats.stack_pushes);
   write_json_field(out, first, "stats_stack_pops", stats.stack_pops);
   write_json_field(out, first, "stats_max_stack_depth", stats.max_stack_depth);
+  write_json_field(out, first, "stats_macro_cells_tested", stats.macro_cells_tested);
+  write_json_field(out, first, "stats_macro_cells_occupied", stats.macro_cells_occupied);
+  write_json_field(out, first, "stats_macro_cells_skipped", stats.macro_cells_skipped);
+  write_json_field(out, first, "stats_macro_tree_entries", stats.macro_tree_entries);
 }
 
 inline void append_jsonl(
@@ -438,6 +490,8 @@ inline void append_jsonl(
   write_json_field(out, first, "grid_size", config.grid_size);
   write_json_field(out, first, "branching", tree.branching() == svo::BranchingMode::Wide4 ? "wide4" : "octree8");
   write_json_field(out, first, "render_strategy", config.render_strategy);
+  write_json_field(out, first, "empty_space_accelerator", config.empty_space_accelerator);
+  write_json_field(out, first, "coarse_resolution", config.empty_space_accelerator == "coarse" ? config.coarse_resolution : 0);
   write_json_field(out, first, "max_depth", tree.max_depth());
   write_json_field(out, first, "nodes", total_nodes(tree));
   write_json_field(out, first, "leaves", tree.num_leaves());
@@ -455,6 +509,7 @@ inline void append_jsonl(
   write_json_field(out, first, "total_wall_ms", metrics.total_wall_ms);
   write_json_field(out, first, "interval_count", metrics.interval_count);
   write_json_field(out, first, "max_intervals_per_ray", metrics.max_intervals_per_ray);
+  write_json_field(out, first, "coarse_occupancy_bytes", metrics.coarse_occupancy_bytes);
   write_json_field(out, first, throughput_name, throughput);
   write_stats_json(out, first, stats);
   out << "}\n";
@@ -468,6 +523,10 @@ inline void print_common_header(const BenchmarkConfig& config, std::string_view 
   std::cout << "  density: " << config.density << '\n';
   std::cout << "  iterations: " << config.iterations << '\n';
   std::cout << "  render_strategy: " << config.render_strategy << '\n';
+  std::cout << "  empty_space_accelerator: " << config.empty_space_accelerator << '\n';
+  if (config.empty_space_accelerator == "coarse") {
+    std::cout << "  coarse_resolution: " << config.coarse_resolution << '\n';
+  }
   std::cout << "  gpu: " << gpu_name() << '\n';
   std::cout << "  cuda_runtime: " << cuda_runtime_version() << '\n';
 }
@@ -480,6 +539,10 @@ inline void print_stats(const svo::TraversalStats& stats) {
   std::cout << "  stats.stack_pushes: " << stats.stack_pushes << '\n';
   std::cout << "  stats.stack_pops: " << stats.stack_pops << '\n';
   std::cout << "  stats.max_stack_depth: " << stats.max_stack_depth << '\n';
+  std::cout << "  stats.macro_cells_tested: " << stats.macro_cells_tested << '\n';
+  std::cout << "  stats.macro_cells_occupied: " << stats.macro_cells_occupied << '\n';
+  std::cout << "  stats.macro_cells_skipped: " << stats.macro_cells_skipped << '\n';
+  std::cout << "  stats.macro_tree_entries: " << stats.macro_tree_entries << '\n';
 }
 
 }  // namespace svo_bench

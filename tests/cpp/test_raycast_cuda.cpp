@@ -1,4 +1,5 @@
 #include <svo/Builder.hpp>
+#include <svo/CoarseOccupancy.hpp>
 #include <svo/DeviceBuffer.hpp>
 #include <svo/Error.hpp>
 #include <svo/Raycast.hpp>
@@ -83,7 +84,9 @@ CudaRaycastResults raycast_cuda_reference(
     const svo::Octree& octree,
     const std::vector<glm::vec3>& origins,
     const std::vector<glm::vec3>& directions,
-    const svo::RaycastOptions& options = {}) {
+    const svo::RaycastOptions& options = {},
+    bool use_coarse = false,
+    int coarse_resolution = 16) {
 #if SVO_ENABLE_CUDA
   svo::DeviceBuffer<svo::NodeDescriptor> device_nodes =
       svo::DeviceBuffer<svo::NodeDescriptor>::from_host(octree.nodes(), svo::Device::CUDA);
@@ -98,6 +101,15 @@ CudaRaycastResults raycast_cuda_reference(
   svo::DeviceBuffer<float> device_t(origins.size(), svo::Device::CUDA);
   svo::DeviceBuffer<glm::vec3> device_positions(origins.size(), svo::Device::CUDA);
   svo::DeviceBuffer<std::int32_t> device_depths(origins.size(), svo::Device::CUDA);
+  svo::DeviceCoarseOccupancyGrid device_coarse;
+  svo::CoarseOccupancyDeviceView coarse_view;
+  svo::RaycastOptions launch_options = options;
+  if (use_coarse) {
+    const svo::CoarseOccupancyGrid coarse_grid = svo::CoarseOccupancyGrid::from_octree(octree, coarse_resolution);
+    device_coarse.upload(coarse_grid);
+    coarse_view = device_coarse.view();
+    launch_options.coarse_occupancy = &coarse_view;
+  }
 
   svo::raycast_cuda(
       device_nodes.data(),
@@ -114,7 +126,7 @@ CudaRaycastResults raycast_cuda_reference(
       device_positions.data(),
       device_depths.data(),
       origins.size(),
-      options);
+      launch_options);
 
   return {
       device_hit_mask.to_host(),
@@ -135,7 +147,9 @@ CudaRaycastResults raycast_wide_cuda_reference(
     const svo::Octree& octree,
     const std::vector<glm::vec3>& origins,
     const std::vector<glm::vec3>& directions,
-    const svo::RaycastOptions& options = {}) {
+    const svo::RaycastOptions& options = {},
+    bool use_coarse = false,
+    int coarse_resolution = 16) {
 #if SVO_ENABLE_CUDA
   svo::DeviceBuffer<svo::WideNodeDescriptor> device_nodes =
       svo::DeviceBuffer<svo::WideNodeDescriptor>::from_host(octree.wide_nodes(), svo::Device::CUDA);
@@ -150,6 +164,15 @@ CudaRaycastResults raycast_wide_cuda_reference(
   svo::DeviceBuffer<float> device_t(origins.size(), svo::Device::CUDA);
   svo::DeviceBuffer<glm::vec3> device_positions(origins.size(), svo::Device::CUDA);
   svo::DeviceBuffer<std::int32_t> device_depths(origins.size(), svo::Device::CUDA);
+  svo::DeviceCoarseOccupancyGrid device_coarse;
+  svo::CoarseOccupancyDeviceView coarse_view;
+  svo::RaycastOptions launch_options = options;
+  if (use_coarse) {
+    const svo::CoarseOccupancyGrid coarse_grid = svo::CoarseOccupancyGrid::from_octree(octree, coarse_resolution);
+    device_coarse.upload(coarse_grid);
+    coarse_view = device_coarse.view();
+    launch_options.coarse_occupancy = &coarse_view;
+  }
 
   svo::raycast_wide_cuda(
       device_nodes.data(),
@@ -166,7 +189,7 @@ CudaRaycastResults raycast_wide_cuda_reference(
       device_positions.data(),
       device_depths.data(),
       origins.size(),
-      options);
+      launch_options);
 
   return {
       device_hit_mask.to_host(),
@@ -494,6 +517,64 @@ void test_wide_raycast_matches_cpu() {
 #endif
 }
 
+void test_coarse_accelerated_raycast_matches_default() {
+#if SVO_ENABLE_CUDA
+  std::vector<glm::ivec3> coordinates;
+  for (int z = 4; z < 12; ++z) {
+    for (int y = 4; y < 12; ++y) {
+      for (int x = 4; x < 12; ++x) {
+        const int dx = x - 8;
+        const int dy = y - 8;
+        const int dz = z - 8;
+        if (dx * dx + dy * dy + dz * dz <= 16) {
+          coordinates.emplace_back(x, y, z);
+        }
+      }
+    }
+  }
+
+  const std::vector<glm::vec3> origins{
+      {-1.0f, 0.5f, 0.5f},
+      {-1.0f, 0.25f, 0.5f},
+      {0.5f, 0.5f, 0.5f},
+      {-1.0f, 0.5f, 0.25f},
+      {-1.0f, 0.9f, 0.9f},
+  };
+  const std::vector<glm::vec3> directions{
+      {1.0f, 0.0f, 0.0f},
+      {1.0f, 0.15f, 0.0f},
+      {1.0f, 0.0f, 0.0f},
+      {1.0f, 0.0f, 0.15f},
+      {1.0f, 0.0f, 0.0f},
+  };
+
+  svo::BuildOptions options;
+  options.max_depth = 4;
+  const svo::Octree octree8 = svo::Octree::from_voxels_cpu(coordinates, options);
+  const CudaRaycastResults base8 = raycast_cuda_reference(octree8, origins, directions);
+  const CudaRaycastResults coarse8 = raycast_cuda_reference(octree8, origins, directions, {}, true, 16);
+  require(base8.hit_mask == coarse8.hit_mask, "coarse octree8 raycast hit mask");
+  require(base8.leaf_ids == coarse8.leaf_ids, "coarse octree8 raycast leaf ids");
+  for (std::size_t index = 0; index < origins.size(); ++index) {
+    require_float_matches(coarse8.t[index], base8.t[index], "coarse octree8 raycast t");
+    require_vec_matches(coarse8.positions[index], base8.positions[index], "coarse octree8 raycast positions");
+    require(coarse8.depths[index] == base8.depths[index], "coarse octree8 raycast depths");
+  }
+
+  options.branching = svo::BranchingMode::Wide4;
+  const svo::Octree wide4 = svo::Octree::from_voxels_cpu(coordinates, options);
+  const CudaRaycastResults base_wide = raycast_wide_cuda_reference(wide4, origins, directions);
+  const CudaRaycastResults coarse_wide = raycast_wide_cuda_reference(wide4, origins, directions, {}, true, 16);
+  require(base_wide.hit_mask == coarse_wide.hit_mask, "coarse wide4 raycast hit mask");
+  require(base_wide.leaf_ids == coarse_wide.leaf_ids, "coarse wide4 raycast leaf ids");
+  for (std::size_t index = 0; index < origins.size(); ++index) {
+    require_float_matches(coarse_wide.t[index], base_wide.t[index], "coarse wide4 raycast t");
+    require_vec_matches(coarse_wide.positions[index], base_wide.positions[index], "coarse wide4 raycast positions");
+    require(coarse_wide.depths[index] == base_wide.depths[index], "coarse wide4 raycast depths");
+  }
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -503,5 +584,6 @@ int main() {
   test_invalid_directions_write_misses();
   test_bad_launcher_inputs_fail();
   test_wide_raycast_matches_cpu();
+  test_coarse_accelerated_raycast_matches_default();
   return 0;
 }

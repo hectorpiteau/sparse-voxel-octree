@@ -1079,11 +1079,16 @@ speed, not general sparse-layout compression.
 
 ### Optional Path — Coarse Occupancy Accelerator
 
-- [ ] Add only if profiling shows tree entry through empty space dominates large scenes.
-- [ ] Evaluate top-level macro resolutions such as `16^3`, `32^3`, and `64^3`.
-- [ ] Traverse macro cells with DDA and enter the tree only for occupied macro cells.
-- [ ] Keep CUDA-resident occupancy data to avoid CPU-GPU transfers.
-- [ ] Ensure this accelerator is optional and does not change query/render semantics.
+- [x] Add as a benchmark/debug-first CUDA accelerator; keep it off by default.
+- [x] Add packed coarse occupancy grids for macro resolutions `16^3`, `32^3`, and `64^3`.
+- [x] Build coarse occupancy from existing Octree8/Wide4 topology, independent of payload values.
+- [x] Traverse macro cells with DDA in CUDA raycast and enter clipped tree traversal only for occupied macro cells.
+- [x] Add conservative CUDA direct-render support: macro DDA skips fully empty rays, then falls back to exact direct traversal after the first occupied macro cell.
+- [x] Keep CUDA-resident occupancy data to avoid CPU-GPU transfers during traversal.
+- [x] Ensure this accelerator is optional and does not change raycast/render semantics.
+- [x] Add benchmark flags: `--empty-space-accelerator none|coarse` and `--coarse-resolution 16|32|64`.
+- [x] Add realtime viewer debug flags for `--empty-space-accelerator none|coarse` and `--coarse-resolution`.
+- [ ] Record benchmark results for `none` vs `coarse` before considering more aggressive render clipping or public API exposure.
 
 ### Deferred Layout Work
 
@@ -1109,14 +1114,15 @@ speed, not general sparse-layout compression.
 - [x] `compute-sanitizer memcheck` passes for C++ interval renderer tests on a CUDA-visible shell.
 - [ ] `compute-sanitizer initcheck` passes for C++ interval renderer tests on a stable CUDA-visible shell.
 - [ ] `compute-sanitizer memcheck/initcheck` passes for Python interval rendering tests on a stable CUDA-visible shell.
-- [ ] Optional coarse occupancy acceleration, if implemented, preserves exact render/query results relative to the non-accelerated path.
+- [x] Optional coarse occupancy acceleration preserves exact CUDA raycast/render results relative to the non-accelerated path in focused tests.
 
 ### Benchmarks
 
 - [ ] Compare old wide traversal vs wide DDA traversal through commit-to-commit benchmarks if needed.
 - [x] Add benchmark support for direct traversal vs interval prepass + interval rendering.
 - [ ] Record benchmark results for direct traversal vs interval prepass + interval rendering.
-- [ ] Compare with and without coarse occupancy acceleration if it is implemented.
+- [x] Add benchmark support for comparing with and without coarse occupancy acceleration.
+- [ ] Record benchmark results for coarse occupancy acceleration across representative scenes and macro resolutions.
 - [ ] Benchmark forward render and backward render separately.
 - [ ] Include realtime viewer FPS measurements for representative small, medium, and large scenes.
 

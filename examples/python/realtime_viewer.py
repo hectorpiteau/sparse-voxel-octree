@@ -192,13 +192,16 @@ def render_cpu(
     return rgb, opacity, FrameProfile(render_ms=(time.perf_counter() - start) * 1000.0)
 
 
-def prepare_cuda_scene(scene: ScenePayload) -> tuple[Any, Any, Any]:
+def prepare_cuda_scene(scene: ScenePayload, empty_space_accelerator: str, coarse_resolution: int) -> tuple[Any, Any, Any, Any | None]:
     import torch
 
     cuda_tree = scene.tree.to("cuda")
     sigma = torch.as_tensor(scene.sigma_np, device="cuda")
     color = torch.as_tensor(scene.color_np, device="cuda")
-    return cuda_tree, sigma, color
+    coarse_occupancy = None
+    if empty_space_accelerator == "coarse":
+        coarse_occupancy = cuda_tree._coarse_occupancy(coarse_resolution)
+    return cuda_tree, sigma, color, coarse_occupancy
 
 
 def render_cuda(
@@ -209,6 +212,7 @@ def render_cuda(
     directions: np.ndarray,
     early_stop_transmittance: float,
     render_strategy: RenderStrategy,
+    coarse_occupancy: Any | None,
     profile: bool,
 ) -> tuple[np.ndarray, np.ndarray, FrameProfile]:
     import torch
@@ -233,6 +237,7 @@ def render_cuda(
             background_color=(0.015, 0.018, 0.026),
             early_stop_transmittance=early_stop_transmittance,
             render_strategy=render_strategy,
+            coarse_occupancy=coarse_occupancy,
         )
         if profile:
             torch.cuda.synchronize()
@@ -255,11 +260,15 @@ def draw_overlay(
     device: str,
     scene: ScenePayload,
     render_strategy: str,
+    empty_space_accelerator: str,
+    coarse_resolution: int,
     profile: FrameProfile | None = None,
 ) -> None:
     lines = [
         f"{fps:6.1f} FPS  {frame_ms:5.2f} ms",
         f"backend: {device}   branching: {scene.branching}   strategy: {render_strategy}",
+        f"accelerator: {empty_space_accelerator}"
+        + (f"   coarse: {coarse_resolution}^3" if empty_space_accelerator == "coarse" else ""),
         f"nodes: {scene.num_nodes}   leaves: {scene.num_leaves}",
         "drag: orbit   wheel: zoom   R: reset   Q/Esc: quit",
     ]
@@ -315,6 +324,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Show detailed frame timing in the overlay.",
     )
+    parser.add_argument(
+        "--empty-space-accelerator",
+        choices=("none", "coarse"),
+        default="none",
+        help="CUDA debug accelerator. coarse builds a packed macro-cell occupancy grid.",
+    )
+    parser.add_argument(
+        "--coarse-resolution",
+        type=int,
+        choices=(16, 32, 64),
+        default=32,
+        help="Macro-cell resolution for --empty-space-accelerator coarse.",
+    )
     return parser.parse_args()
 
 
@@ -334,6 +356,10 @@ def main() -> None:
     render_strategy = "direct" if args.render_strategy == "auto" else args.render_strategy
     if render_strategy == "intervals" and device != "cuda":
         raise ValueError("--render-strategy intervals requires --device cuda or --device auto resolving to CUDA")
+    if args.empty_space_accelerator == "coarse" and device != "cuda":
+        raise ValueError("--empty-space-accelerator coarse requires --device cuda or --device auto resolving to CUDA")
+    if args.empty_space_accelerator == "coarse" and render_strategy != "direct":
+        raise ValueError("--empty-space-accelerator coarse currently requires --render-strategy direct")
 
     try:
         import pygame
@@ -343,7 +369,7 @@ def main() -> None:
         ) from error
 
     scene = build_sphere_scene(args.grid_size, args.radius, args.branching)
-    cuda_resources = prepare_cuda_scene(scene) if device == "cuda" else None
+    cuda_resources = prepare_cuda_scene(scene, args.empty_space_accelerator, args.coarse_resolution) if device == "cuda" else None
 
     pygame.init()
     pygame.display.set_caption("SVO real-time forward renderer")
@@ -389,12 +415,16 @@ def main() -> None:
         origins, directions = generate_rays(args.width, args.height, orbit, args.fov_y)
         if device == "cuda":
             assert cuda_resources is not None
+            cuda_tree, sigma_t, color_t, coarse_occupancy = cuda_resources
             rgb, opacity, profile = render_cuda(
-                *cuda_resources,
+                cuda_tree,
+                sigma_t,
+                color_t,
                 origins,
                 directions,
                 args.early_stop_transmittance,
                 render_strategy=render_strategy,
+                coarse_occupancy=coarse_occupancy,
                 profile=args.profile,
             )
         else:
@@ -420,6 +450,8 @@ def main() -> None:
             device,
             scene,
             render_strategy,
+            args.empty_space_accelerator,
+            args.coarse_resolution,
             profile if args.profile else None,
         )
         pygame.display.flip()

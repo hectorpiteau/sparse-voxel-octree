@@ -41,6 +41,17 @@ struct TraversalStats {
   std::uint64_t stack_pushes = 0;
   std::uint64_t stack_pops = 0;
   std::uint64_t max_stack_depth = 0;
+  std::uint64_t macro_cells_tested = 0;
+  std::uint64_t macro_cells_occupied = 0;
+  std::uint64_t macro_cells_skipped = 0;
+  std::uint64_t macro_tree_entries = 0;
+};
+
+struct CoarseOccupancyDeviceView {
+  const std::uint32_t* words = nullptr;
+  int resolution = 0;
+  glm::vec3 min_bound{0.0f, 0.0f, 0.0f};
+  glm::vec3 max_bound{1.0f, 1.0f, 1.0f};
 };
 
 struct BuildOptions {
@@ -63,6 +74,7 @@ struct RenderOptions {
   bool store_aux = false;
   bool enable_empty_space_skipping = true;
   TraversalStats* stats = nullptr;
+  const CoarseOccupancyDeviceView* coarse_occupancy = nullptr;
 };
 
 class NodeDescriptor final {
