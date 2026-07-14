@@ -52,9 +52,10 @@ def test_refine_octree_splits_and_copies_payloads() -> None:
 
     assert result.tree.num_leaves == 15
     assert result.stats["split_leaves"] == 1
-    assert result.old_to_new_leaf[0] == 0
-    np.testing.assert_allclose(result.sigma[:8], np.full(8, 2.0, dtype=np.float32))
-    np.testing.assert_allclose(result.color[:8], np.tile(color[0], (8, 1)))
+    split_rows = result.new_from_old_leaf == 0
+    assert split_rows.sum() == 8
+    np.testing.assert_allclose(result.sigma[split_rows], np.full(8, 2.0, dtype=np.float32))
+    np.testing.assert_allclose(result.color[split_rows], np.tile(color[0], (8, 1)))
 
 
 def test_refine_octree_prunes_low_density_leaves() -> None:
@@ -113,6 +114,34 @@ def test_refine_octree_rejects_excessive_growth() -> None:
         )
 
 
+def test_refine_octree_can_refine_repeatedly_after_canonical_reorder() -> None:
+    tree = svo.Octree.full_grid(max_depth=4, leaf_depth=2)
+    sigma = np.ones(tree.num_leaves, dtype=np.float32)
+    color = np.zeros((tree.num_leaves, 3), dtype=np.float32)
+
+    first = svo.refine_octree(
+        tree,
+        sigma,
+        color,
+        split_threshold=0.5,
+        prune_threshold=-1.0,
+        max_leaf_growth=8.0,
+    )
+
+    np.testing.assert_array_equal(first.tree.leaf_payload_indices, np.arange(first.tree.num_leaves, dtype=np.int32))
+
+    second = svo.refine_octree(
+        first.tree,
+        first.sigma,
+        first.color,
+        split_threshold=10.0,
+        prune_threshold=-1.0,
+        max_leaf_growth=8.0,
+    )
+
+    np.testing.assert_array_equal(second.tree.leaf_payload_indices, np.arange(second.tree.num_leaves, dtype=np.int32))
+
+
 def test_refine_octree_rejects_wide4() -> None:
     tree = svo.Octree.from_voxels(np.array([[0, 0, 0]], dtype=np.int32), max_depth=2, branching="wide4")
     sigma = np.ones(tree.num_leaves, dtype=np.float32)
@@ -147,4 +176,10 @@ def test_refine_octree_torch_cuda_remaps_payloads_on_cuda() -> None:
     assert result.cuda_tree.device == "cuda"
     assert result.sigma.is_cuda
     assert result.color.is_cuda
-    torch.testing.assert_close(result.sigma[:8], torch.full((8,), 2.0, device="cuda"))
+    split_rows = torch.as_tensor(result.new_from_old_leaf == 0, device="cuda")
+    assert int(split_rows.sum().item()) == 8
+    torch.testing.assert_close(result.sigma[split_rows], torch.full((8,), 2.0, device="cuda"))
+    torch.testing.assert_close(
+        result.color[split_rows],
+        torch.tensor([[1.0, 0.5, 0.25]], device="cuda").expand(8, 3),
+    )

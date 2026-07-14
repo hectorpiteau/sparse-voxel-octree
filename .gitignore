@@ -29,6 +29,7 @@ docs/_site/
 site/
 
 examples/data/
+outputs/
 third_party/glm/doc/
 third_party/pybind11/.github/
 third_party/pybind11/docs/

@@ -264,6 +264,39 @@ def _remap_torch_payloads(
     return new_sigma, new_color
 
 
+def _canonicalize_refined_tree(
+    tree_type: Any,
+    provisional_tree: Any,
+    old_to_new: np.ndarray,
+    new_from_old: np.ndarray,
+    root_bounds: Any,
+) -> tuple[Any, np.ndarray, np.ndarray, np.ndarray]:
+    ordered_coords, ordered_depths, ordered_payload_indices = provisional_tree.leaf_specs
+    ordered_payload_indices = np.asarray(ordered_payload_indices, dtype=np.int64)
+    new_count = ordered_payload_indices.shape[0]
+    if not np.array_equal(np.sort(ordered_payload_indices), np.arange(new_count, dtype=np.int64)):
+        raise ValueError("refined leaf payload indices are not a permutation")
+
+    provisional_to_final = np.empty(new_count, dtype=np.int32)
+    provisional_to_final[ordered_payload_indices] = np.arange(new_count, dtype=np.int32)
+
+    canonical_payload_indices = np.arange(new_count, dtype=np.int32)
+    canonical_tree = tree_type.from_leaf_specs(
+        ordered_coords,
+        ordered_depths,
+        canonical_payload_indices,
+        max_depth=int(provisional_tree.max_depth),
+        root_bounds=root_bounds,
+        branching="octree8",
+    )
+
+    canonical_old_to_new = np.full_like(old_to_new, -1)
+    valid = old_to_new >= 0
+    canonical_old_to_new[valid] = provisional_to_final[old_to_new[valid]]
+    canonical_new_from_old = new_from_old[ordered_payload_indices]
+    return canonical_tree, ordered_payload_indices.astype(np.int64, copy=False), canonical_old_to_new, canonical_new_from_old
+
+
 def refine_octree(
     tree_or_cuda_tree: Any,
     sigma: Any,
@@ -327,7 +360,8 @@ def refine_octree(
     )
 
     cpu_tree = tree_or_cuda_tree.to("cpu") if hasattr(tree_or_cuda_tree, "_render_volume_torch") else tree_or_cuda_tree
-    new_tree = type(cpu_tree).from_leaf_specs(
+    provisional_new_from_old = new_from_old
+    provisional_tree = type(cpu_tree).from_leaf_specs(
         new_coords,
         new_depths,
         new_payload_indices,
@@ -335,13 +369,28 @@ def refine_octree(
         root_bounds=tree_or_cuda_tree.root_bounds,
         branching="octree8",
     )
+    new_tree, payload_order, old_to_new, canonical_new_from_old = _canonicalize_refined_tree(
+        type(cpu_tree),
+        provisional_tree,
+        old_to_new,
+        new_from_old,
+        tree_or_cuda_tree.root_bounds,
+    )
 
     if tensor_mode:
-        new_sigma, new_color = _remap_torch_payloads(sigma, color, scores, new_from_old, merge_rows)
+        new_sigma, new_color = _remap_torch_payloads(sigma, color, scores, provisional_new_from_old, merge_rows)
+        import torch
+
+        payload_order_tensor = torch.as_tensor(payload_order, device=new_sigma.device, dtype=torch.long)
+        new_sigma = new_sigma.index_select(0, payload_order_tensor)
+        new_color = new_color.index_select(0, payload_order_tensor)
         cuda_tree = new_tree.to("cuda")
     else:
-        new_sigma, new_color = _remap_numpy_payloads(sigma, color, scores, new_from_old, merge_rows)
+        new_sigma, new_color = _remap_numpy_payloads(sigma, color, scores, provisional_new_from_old, merge_rows)
+        new_sigma = new_sigma[payload_order]
+        new_color = new_color[payload_order]
         cuda_tree = None
+    new_from_old = canonical_new_from_old
 
     return RefinementResult(
         tree=new_tree,
