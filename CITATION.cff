@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this Sparse Voxel Repository, please cite it as below."
+title: "Sparse Voxels Toolkit"
+type: software
+authors:
+  - family-names: "Piteau"
+    given-names: "Hector"
+repository-code: "https://github.com/hectorpiteau/sparse-voxels"
+url: "https://hectorpiteau.github.io/sparse-voxels/"
+license: "MIT"
+version: "0.1.0"
+date-released: "2026-07-14"
